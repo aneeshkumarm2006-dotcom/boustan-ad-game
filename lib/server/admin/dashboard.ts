@@ -1,11 +1,11 @@
 /**
- * Dashboard data (ADM-02): the daily funnel from v_funnel_daily, split by placement, language
- * or device, plus health numbers. The funnel reads the rollup table, which the dashboard
- * refreshes (at most once a minute) so today's numbers are current even between cron runs.
+ * Dashboard data (ADM-02): the daily funnel read from the events_daily rollup, split by
+ * placement, language or device, plus health numbers. The dashboard refreshes the rollup (at
+ * most once a minute) so today's numbers are current even between cron runs.
  */
-import { sql } from "drizzle-orm";
+import type { Document } from "mongodb";
 import type { Db, Queryable } from "@/db/client";
-import { montrealDay, rollupEvents } from "../analytics";
+import { montrealDay, montrealDayStart, rollupEvents } from "../analytics";
 
 export const FUNNEL_STEPS = [
   { key: "loads", label: "Game loads" },
@@ -50,12 +50,21 @@ export interface FunnelRow extends Funnel {
   key: string;
 }
 
-const COLUMN: Record<Split, ReturnType<typeof sql.raw>> = {
-  day: sql.raw("day::text"),
-  src: sql.raw("src"),
-  lang: sql.raw("lang"),
-  device: sql.raw("device"),
-};
+/** `$sum` of `field` over the rollup rows for one event (and, optionally, one detail). */
+const sumOf = (field: "events" | "sessions", name: string, detail?: string): Document => ({
+  $sum: {
+    $cond: [
+      {
+        $and: [
+          { $eq: ["$name", name] },
+          ...(detail === undefined ? [] : [{ $eq: ["$detail", detail] }]),
+        ],
+      },
+      `$${field}`,
+      0,
+    ],
+  },
+});
 
 /** Funnel rows between two Montréal days (inclusive), grouped by `split`. */
 export async function funnel(
@@ -64,27 +73,35 @@ export async function funnel(
   to: string,
   split: Split,
 ): Promise<FunnelRow[]> {
-  const col = COLUMN[split];
-  const rows = await q.execute<Record<string, string | number> & { key: string }>(sql`
-    select ${col} as key,
-      sum(loads)::int as "loads", sum(starts)::int as "starts",
-      sum(reached_100m)::int as "reached100m", sum(garlic_10)::int as "garlic10",
-      sum(claim_views)::int as "claimViews", sum(claims)::int as "claims",
-      sum(opt_ins)::int as "optIns"
-    from v_funnel_daily
-    where day between ${from}::date and ${to}::date
-    group by 1
-    order by ${split === "day" ? sql`1 desc` : sql`"starts" desc, 1`}
-  `);
+  const rows = await q.eventsDaily
+    .aggregate<{ _id: string | null } & Funnel>([
+      { $match: { day: { $gte: from, $lte: to } } },
+      {
+        $group: {
+          _id: `$${split}`,
+          // Loads are distinct sessions; every other step counts events.
+          loads: sumOf("sessions", "load"),
+          starts: sumOf("events", "start"),
+          reached100m: sumOf("events", "milestone", "100"),
+          garlic10: sumOf("events", "reward_unlocked", "free_garlic_sauce"),
+          claimViews: sumOf("events", "claim_view"),
+          claims: sumOf("events", "claim_success"),
+          optIns: sumOf("events", "opt_in"),
+        },
+      },
+      // Newest day first; otherwise the busiest placement, language or device first.
+      { $sort: split === "day" ? { _id: -1 } : { starts: -1, _id: 1 } },
+    ])
+    .toArray();
   return rows.map((r) => ({
-    key: String(r.key ?? ""),
-    loads: Number(r.loads),
-    starts: Number(r.starts),
-    reached100m: Number(r.reached100m),
-    garlic10: Number(r.garlic10),
-    claimViews: Number(r.claimViews),
-    claims: Number(r.claims),
-    optIns: Number(r.optIns),
+    key: String(r._id ?? ""),
+    loads: r.loads,
+    starts: r.starts,
+    reached100m: r.reached100m,
+    garlic10: r.garlic10,
+    claimViews: r.claimViews,
+    claims: r.claims,
+    optIns: r.optIns,
   }));
 }
 
@@ -104,41 +121,41 @@ export interface Health {
   runs24h: number;
 }
 
-export async function health(q: Queryable): Promise<Health> {
-  const [row] = await q.execute<Record<string, number>>(sql`
-    select
-      (select count(*)::int from players where deleted_at is null) as players,
-      (select count(*)::int from players where deleted_at is null and marketing_opt_in) as opted_in,
-      (select count(*)::int from claims
-        where (created_at at time zone 'America/Toronto')::date
-            = (now() at time zone 'America/Toronto')::date) as claims_today,
-      (select count(*)::int from email_outbox where status = 'failed') as emails_failed,
-      (select count(*)::int from email_outbox where status in ('pending', 'retry', 'sending')) as emails_waiting,
-      (select count(*)::int from runs where status = 'flagged' and finished_at > now() - interval '24 hours') as flagged,
-      (select count(*)::int from runs where finished_at > now() - interval '24 hours') as runs
-  `);
+export async function health(q: Queryable, now = new Date()): Promise<Health> {
+  const day = new Date(now.getTime() - 24 * 3_600_000);
+  const today = montrealDayStart(montrealDay(0, now.getTime()));
+  // One count after another keeps this usable inside a transaction too.
   return {
-    players: Number(row.players),
-    optedIn: Number(row.opted_in),
-    claimsToday: Number(row.claims_today),
-    emailsFailed: Number(row.emails_failed),
-    emailsWaiting: Number(row.emails_waiting),
-    flaggedRuns24h: Number(row.flagged),
-    runs24h: Number(row.runs),
+    players: await q.players.countDocuments({ deletedAt: null }),
+    optedIn: await q.players.countDocuments({ deletedAt: null, marketingOptIn: true }),
+    claimsToday: await q.claims.countDocuments({ createdAt: { $gte: today } }),
+    emailsFailed: await q.emailOutbox.countDocuments({ status: "failed" }),
+    emailsWaiting: await q.emailOutbox.countDocuments({
+      status: { $in: ["pending", "retry", "sending"] },
+    }),
+    flaggedRuns24h: await q.runs.countDocuments({ status: "flagged", finishedAt: { $gt: day } }),
+    runs24h: await q.runs.countDocuments({ finishedAt: { $gt: day } }),
   };
 }
 
-/** The last `n` audit rows, newest first. */
-export async function recentAudit(q: Queryable, limit = 100, offset = 0) {
-  return q.execute<{
-    id: number;
-    admin_email: string;
-    action: string;
-    target: string | null;
-    details: Record<string, unknown>;
-    created_at: Date | string;
-  }>(sql`
-    select id, admin_email, action, target, details, created_at
-    from admin_audit order by id desc limit ${limit} offset ${offset}
-  `);
+export interface AuditRow {
+  id: string;
+  adminEmail: string;
+  action: string;
+  target: string | null;
+  details: Record<string, unknown>;
+  createdAt: Date;
+}
+
+/** Audit rows, newest first. */
+export async function recentAudit(q: Queryable, limit = 100, offset = 0): Promise<AuditRow[]> {
+  const rows = await q.adminAudit.find().sort({ _id: -1 }).skip(offset).limit(limit).toArray();
+  return rows.map((r) => ({
+    id: r._id.toHexString(),
+    adminEmail: r.adminEmail,
+    action: r.action,
+    target: r.target,
+    details: r.details,
+    createdAt: r.createdAt,
+  }));
 }

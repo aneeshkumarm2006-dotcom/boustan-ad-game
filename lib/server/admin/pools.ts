@@ -3,9 +3,9 @@
  * strict: codes are trimmed and de-duplicated, a code already in any pool is rejected, and
  * the admin gets a summary of what happened to every row.
  */
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import type { AnyBulkWriteOperation, Document } from "mongodb";
 import type { Db, Queryable } from "@/db/client";
-import { codes, rewards } from "@/db/schema";
+import { NO_EXPIRY, newCode, type CodeDoc } from "@/db/schema";
 import { REWARD_IDS, isRewardId, type RewardId } from "@/game-core";
 import { parseCsv } from "@/lib/csv";
 import { parseMontrealLocal } from "./time";
@@ -116,7 +116,13 @@ export function defaultBatchName(now = new Date()): string {
 
 export type ImportResult = { ok: true; summary: ImportSummary } | { ok: false; error: string };
 
-/** Adds a CSV's codes to a reward's pool. Nothing is written if the file has no usable rows. */
+/**
+ * Adds a CSV's codes to a reward's pool. Nothing is written if the file has no usable rows.
+ *
+ * A file can hold 200,000 codes, which is too much for one transaction, so the import runs in
+ * chunks. Every chunk skips codes that already exist, so if one fails the admin uploads the
+ * same file again and only the missing codes are added.
+ */
 export async function importCodes(
   q: Db,
   reward: string,
@@ -133,40 +139,38 @@ export async function importCodes(
   let imported = 0;
   let alreadyExist = 0;
   let inOtherPool = 0;
-  await q.transaction(async (tx) => {
-    for (let i = 0; i < parsed.valid.length; i += CHUNK) {
-      const chunk = parsed.valid.slice(i, i + CHUNK);
-      const existing = await tx
-        .select({ code: codes.code, rewardId: codes.rewardId })
-        .from(codes)
-        .where(
-          inArray(
-            codes.code,
-            chunk.map((c) => c.code),
-          ),
-        );
-      const taken = new Map(existing.map((e) => [e.code, e.rewardId]));
-      const fresh = chunk.filter((c) => !taken.has(c.code));
-      alreadyExist += chunk.length - fresh.length;
-      inOtherPool += existing.filter((e) => e.rewardId !== reward).length;
-      if (fresh.length === 0) continue;
-      // The unique index is the real guard if two imports run at once.
-      const inserted = await tx
-        .insert(codes)
-        .values(
-          fresh.map((c) => ({
-            rewardId: reward,
-            code: c.code,
-            expiresAt: c.expiresAt,
-            batch: c.batch ?? batchName,
-          })),
-        )
-        .onConflictDoNothing({ target: codes.code })
-        .returning({ id: codes.id });
-      imported += inserted.length;
-      alreadyExist += fresh.length - inserted.length;
-    }
-  });
+  for (let i = 0; i < parsed.valid.length; i += CHUNK) {
+    const chunk = parsed.valid.slice(i, i + CHUNK);
+    const existing = await q.codes
+      .find({ code: { $in: chunk.map((c) => c.code) } }, { projection: { code: 1, rewardId: 1 } })
+      .toArray();
+    const taken = new Map(existing.map((e) => [e.code, e.rewardId]));
+    const fresh = chunk.filter((c) => !taken.has(c.code));
+    alreadyExist += chunk.length - fresh.length;
+    inOtherPool += existing.filter((e) => e.rewardId !== reward).length;
+    if (fresh.length === 0) continue;
+    // The unique index is the real guard if two imports run at once: a code another import
+    // added a moment ago is matched here and left alone.
+    const added = await q.codes.bulkWrite(
+      fresh.map((c): AnyBulkWriteOperation<CodeDoc> => ({
+        updateOne: {
+          filter: { code: c.code },
+          update: {
+            $setOnInsert: newCode({
+              rewardId: reward,
+              code: c.code,
+              expiresAt: c.expiresAt,
+              batch: c.batch ?? batchName,
+            }),
+          },
+          upsert: true,
+        },
+      })),
+      { ordered: false },
+    );
+    imported += added.upsertedCount;
+    alreadyExist += fresh.length - added.upsertedCount;
+  }
 
   return {
     ok: true,
@@ -199,7 +203,8 @@ export interface RedemptionSummary {
 
 /**
  * Marks issued codes as redeemed from uEat's report. Needs a `code` column (or one column of
- * codes); an optional `redeemed_at` is kept, otherwise the upload time is used.
+ * codes); an optional `redeemed_at` is kept, otherwise the upload time is used. Each code is
+ * updated only while it is still `assigned`, so uploading a report twice is harmless.
  */
 export async function markRedeemed(
   q: Db,
@@ -235,34 +240,31 @@ export async function markRedeemed(
     if (!wanted.has(code)) wanted.set(code, at ?? now);
   }
   const list = [...wanted.entries()];
-  await q.transaction(async (tx) => {
-    for (let i = 0; i < list.length; i += CHUNK) {
-      const chunk = list.slice(i, i + CHUNK);
-      const found = await tx
-        .select({ id: codes.id, code: codes.code, status: codes.status })
-        .from(codes)
-        .where(
-          inArray(
-            codes.code,
-            chunk.map(([c]) => c),
-          ),
-        );
-      const byCode = new Map(found.map((f) => [f.code, f]));
-      for (const [code, at] of chunk) {
-        const row = byCode.get(code);
-        if (!row) summary.unknown++;
-        else if (row.status === "redeemed") summary.alreadyRedeemed++;
-        else if (row.status !== "assigned") summary.notIssued++;
-        else {
-          await tx
-            .update(codes)
-            .set({ status: "redeemed", redeemedAt: at })
-            .where(and(eq(codes.id, row.id), eq(codes.status, "assigned")));
-          summary.marked++;
-        }
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const chunk = list.slice(i, i + CHUNK);
+    const found = await q.codes
+      .find({ code: { $in: chunk.map(([c]) => c) } }, { projection: { code: 1, status: 1 } })
+      .toArray();
+    const byCode = new Map(found.map((f) => [f.code, f]));
+    const marks: AnyBulkWriteOperation<CodeDoc>[] = [];
+    for (const [code, at] of chunk) {
+      const row = byCode.get(code);
+      if (!row) summary.unknown++;
+      else if (row.status === "redeemed") summary.alreadyRedeemed++;
+      else if (row.status !== "assigned") summary.notIssued++;
+      else {
+        marks.push({
+          updateOne: {
+            filter: { _id: row._id, status: "assigned" },
+            update: { $set: { status: "redeemed", redeemedAt: at } },
+          },
+        });
       }
     }
-  });
+    if (marks.length > 0) {
+      summary.marked += (await q.codes.bulkWrite(marks, { ordered: false })).modifiedCount;
+    }
+  }
   return { ok: true, summary };
 }
 
@@ -285,27 +287,43 @@ export interface PoolStats {
   redemptionRate: number | null;
 }
 
-export async function poolStats(q: Queryable): Promise<PoolStats[]> {
-  const counts = await q
-    .select({
-      reward: codes.rewardId,
-      total: sql<number>`count(*)::int`,
-      available: sql<number>`count(*) filter (where ${codes.status} = 'available' and (${codes.expiresAt} is null or ${codes.expiresAt} > now()))::int`,
-      expiredAvailable: sql<number>`count(*) filter (where ${codes.status} = 'available' and ${codes.expiresAt} <= now())::int`,
-      assigned: sql<number>`count(*) filter (where ${codes.status} = 'assigned')::int`,
-      redeemed: sql<number>`count(*) filter (where ${codes.status} = 'redeemed')::int`,
-      void: sql<number>`count(*) filter (where ${codes.status} = 'void')::int`,
-    })
-    .from(codes)
-    .groupBy(codes.rewardId);
-  const rows = await q.select().from(rewards).orderBy(rewards.sortOrder);
+/** `$sum` of 1 for each code where `test` holds. */
+const countIf = (test: Document): Document => ({ $sum: { $cond: [test, 1, 0] } });
+const hasStatus = (status: string): Document => ({ $eq: ["$status", status] });
+
+export async function poolStats(q: Queryable, now = new Date()): Promise<PoolStats[]> {
+  const expiry: Document = { $ifNull: ["$expiresAt", NO_EXPIRY] };
+  const counts = await q.codes
+    .aggregate<{
+      _id: string;
+      total: number;
+      available: number;
+      expiredAvailable: number;
+      assigned: number;
+      redeemed: number;
+      void: number;
+    }>([
+      {
+        $group: {
+          _id: "$rewardId",
+          total: { $sum: 1 },
+          available: countIf({ $and: [hasStatus("available"), { $gt: [expiry, now] }] }),
+          expiredAvailable: countIf({ $and: [hasStatus("available"), { $lte: [expiry, now] }] }),
+          assigned: countIf(hasStatus("assigned")),
+          redeemed: countIf(hasStatus("redeemed")),
+          void: countIf(hasStatus("void")),
+        },
+      },
+    ])
+    .toArray();
+  const rows = await q.rewards.find().sort({ sortOrder: 1 }).toArray();
   return rows
-    .filter((r) => isRewardId(r.id))
+    .filter((r) => isRewardId(r._id))
     .map((r) => {
-      const c = counts.find((x) => x.reward === r.id);
+      const c = counts.find((x) => x._id === r._id);
       const issued = (c?.assigned ?? 0) + (c?.redeemed ?? 0);
       return {
-        reward: r.id as RewardId,
+        reward: r._id as RewardId,
         active: r.active,
         names: r.names,
         total: c?.total ?? 0,
@@ -351,10 +369,10 @@ export async function setPoolAlerts(
   reward: RewardId,
   thresholds: number[],
 ): Promise<void> {
-  await q
-    .update(rewards)
-    .set({ alertThresholds: thresholds, alertLevel: null, updatedAt: new Date() })
-    .where(eq(rewards.id, reward));
+  await q.rewards.updateOne(
+    { _id: reward },
+    { $set: { alertThresholds: thresholds, alertLevel: null, updatedAt: new Date() } },
+  );
 }
 
 export interface BatchRow {
@@ -367,17 +385,30 @@ export interface BatchRow {
 
 /** The most recent import batches, with how many of each are still available. */
 export async function recentBatches(q: Queryable, limit = 12): Promise<BatchRow[]> {
-  const rows = await q
-    .select({
-      reward: codes.rewardId,
-      batch: sql<string>`coalesce(${codes.batch}, '(none)')`,
-      codes: sql<number>`count(*)::int`,
-      available: sql<number>`count(*) filter (where ${codes.status} = 'available')::int`,
-      addedAt: sql<Date>`min(${codes.createdAt})`,
-    })
-    .from(codes)
-    .groupBy(codes.rewardId, sql`coalesce(${codes.batch}, '(none)')`)
-    .orderBy(desc(sql`min(${codes.createdAt})`))
-    .limit(limit);
-  return rows.map((r) => ({ ...r, addedAt: new Date(r.addedAt) }));
+  const rows = await q.codes
+    .aggregate<{
+      _id: { reward: string; batch: string };
+      codes: number;
+      available: number;
+      addedAt: Date;
+    }>([
+      {
+        $group: {
+          _id: { reward: "$rewardId", batch: { $ifNull: ["$batch", "(none)"] } },
+          codes: { $sum: 1 },
+          available: countIf(hasStatus("available")),
+          addedAt: { $min: "$createdAt" },
+        },
+      },
+      { $sort: { addedAt: -1, "_id.reward": 1, "_id.batch": 1 } },
+      { $limit: limit },
+    ])
+    .toArray();
+  return rows.map((r) => ({
+    reward: r._id.reward,
+    batch: r._id.batch,
+    codes: r.codes,
+    available: r.available,
+    addedAt: r.addedAt,
+  }));
 }

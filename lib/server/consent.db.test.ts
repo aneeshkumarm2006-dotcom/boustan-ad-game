@@ -1,7 +1,7 @@
-import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { consents, crmOutbox, players } from "@/db/schema";
+import { newConsent } from "@/db/schema";
 import { BOTH, connect, ctx, finish, resetDb, seedCampaign } from "@/tests/db";
+import { erasePlayer } from "./admin/players";
 import { claimRewards } from "./claims";
 import { signToken } from "./tokens";
 import { unsubscribe } from "./unsubscribe";
@@ -32,26 +32,47 @@ async function optedInPlayer() {
   return res.playerId;
 }
 
+// MongoDB has no trigger to refuse an UPDATE, so the log is append-only by construction: the app
+// only ever inserts consent rows, and its database user has no `update` on the collection
+// (db/roles.ts, checked in db/roles.db.test.ts).
 describe("consent log is append-only (DATA-03)", () => {
-  it("refuses UPDATE and DELETE", async () => {
-    await optedInPlayer();
-    // Drizzle wraps the driver error; the trigger's message is on its cause.
-    const refused = {
-      cause: expect.objectContaining({ message: expect.stringMatching(/append-only/) }),
-    };
-    await expect(db.update(consents).set({ granted: false })).rejects.toMatchObject(refused);
-    await expect(db.delete(consents)).rejects.toMatchObject(refused);
-    await expect(db.execute(sql`truncate consents cascade`)).rejects.toMatchObject(refused);
-    expect(await db.select().from(consents)).toHaveLength(2);
+  it("only gains rows: a withdrawal is a new row, and earlier ones are never rewritten", async () => {
+    const playerId = await optedInPlayer();
+    const before = await db.consents.find().sort({ _id: 1 }).toArray();
+    expect(before).toHaveLength(2);
+
+    await unsubscribe(db, signToken("unsubscribe", { v: 1, p: playerId }), ctx());
+    await unsubscribe(db, signToken("unsubscribe", { v: 1, p: playerId }), ctx());
+
+    const after = await db.consents.find().sort({ _id: 1 }).toArray();
+    expect(after).toHaveLength(4);
+    expect(after.slice(0, 2)).toEqual(before);
+    expect(after.slice(2).map((c) => [c.kind, c.granted])).toEqual([
+      ["marketing", false],
+      ["marketing", false],
+    ]);
   });
 
-  it("lets the retention job delete when it says so", async () => {
-    await optedInPlayer();
-    await db.transaction(async (tx) => {
-      await tx.execute(sql`set local boustan.allow_consent_purge = 'on'`);
-      await tx.delete(consents);
-    });
-    expect(await db.select().from(consents)).toHaveLength(0);
+  it("is emptied for a player only by erasing that player (DATA-07)", async () => {
+    const playerId = await optedInPlayer();
+    expect(await db.consents.countDocuments({ playerId })).toBe(2);
+    expect(await erasePlayer(db, playerId)).toMatchObject({ consentRows: 2 });
+    expect(await db.consents.countDocuments({ playerId })).toBe(0);
+  });
+
+  it("only knows the two kinds of consent", async () => {
+    const row = {
+      playerId: "p1",
+      granted: true,
+      text: "…",
+      textVersion: "v1",
+      language: "fr",
+      source: "claim_form",
+    };
+    await db.consents.insertOne(newConsent({ ...row, kind: "marketing" }));
+    await expect(db.consents.insertOne(newConsent({ ...row, kind: "other" }))).rejects.toThrow(
+      /validation/i,
+    );
   });
 });
 
@@ -61,9 +82,9 @@ describe("unsubscribe link (DATA-07, AC-07)", () => {
     const token = signToken("unsubscribe", { v: 1, p: playerId });
     expect(await unsubscribe(db, token, ctx())).toEqual({ lang: "fr" });
 
-    const [player] = await db.select().from(players).where(eq(players.id, playerId));
+    const player = (await db.players.findOne({ _id: playerId }))!;
     expect(player.marketingOptIn).toBe(false);
-    const rows = await db.select().from(consents).orderBy(consents.id);
+    const rows = await db.consents.find().sort({ _id: 1 }).toArray();
     expect(rows.at(-1)).toMatchObject({
       kind: "marketing",
       granted: false,
@@ -72,7 +93,7 @@ describe("unsubscribe link (DATA-07, AC-07)", () => {
       ip: "203.0.113.7",
       text: "Désabonnement des offres et nouvelles de Boustan par courriel.",
     });
-    const crm = await db.select().from(crmOutbox).where(eq(crmOutbox.type, "consent_changed"));
+    const crm = await db.crmOutbox.find({ type: "consent_changed" }).sort({ _id: 1 }).toArray();
     expect(crm.map((c) => c.payload.marketing)).toEqual([true, false]);
   });
 
@@ -81,7 +102,7 @@ describe("unsubscribe link (DATA-07, AC-07)", () => {
     expect(await unsubscribe(db, "nope.nope", ctx())).toBeNull();
     const claimKind = signToken("claim", { v: 1, p: playerId });
     expect(await unsubscribe(db, claimKind, ctx())).toBeNull();
-    const [player] = await db.select().from(players);
+    const player = (await db.players.findOne())!;
     expect(player.marketingOptIn).toBe(true);
   });
 });

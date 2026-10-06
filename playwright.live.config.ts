@@ -1,17 +1,18 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * End to end against the real API and a real Postgres (Stage 2 "done when"): a claim with a
- * test pool, the sandboxed email, unsubscribe, and a forged run. Needs a database:
- * LIVE_DATABASE_URL, or `npm run db:local` running (a separate boustan_e2e database is used).
+ * End to end against the real API and a real MongoDB (Stage 2 "done when"): a claim with a
+ * test pool, the sandboxed email, unsubscribe, and a forged run. Needs a replica set:
+ * LIVE_MONGODB_URI, or `npm run db:local` running (a separate boustan_e2e database is used).
  *
  *   npm run test:e2e:live
  *
  * Turnstile uses Cloudflare's always-pass test keys, so the browser needs network access.
  */
 const PORT = 3300;
-export const LIVE_DATABASE_URL =
-  process.env.LIVE_DATABASE_URL ?? "postgres://postgres:postgres@localhost:54339/boustan_e2e";
+export const LIVE_MONGODB_URI =
+  process.env.LIVE_MONGODB_URI ??
+  "mongodb://127.0.0.1:27019/boustan_e2e?replicaSet=rs0&directConnection=true";
 
 export default defineConfig({
   testDir: "./e2e-live",
@@ -29,8 +30,8 @@ export default defineConfig({
     timeout: 180_000,
     env: {
       NEXT_PUBLIC_API_MODE: "live",
-      // Set LIVE_APP_DATABASE_URL to run the server as the least-privilege role (db/roles.sql).
-      DATABASE_URL: process.env.LIVE_APP_DATABASE_URL ?? LIVE_DATABASE_URL,
+      // Set LIVE_APP_MONGODB_URI to run the server as the least-privilege user (db/roles.ts).
+      MONGODB_URI: process.env.LIVE_APP_MONGODB_URI ?? LIVE_MONGODB_URI,
       RUN_TOKEN_SECRET: "e2e-live-secret-e2e-live-secret-e2e-live-secret",
       APP_URL: `http://localhost:${PORT}`,
       EMAIL_SANDBOX: "1",

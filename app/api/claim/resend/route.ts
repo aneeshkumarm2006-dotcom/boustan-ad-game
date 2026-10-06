@@ -1,13 +1,11 @@
-import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { after } from "next/server";
 import { z } from "zod";
-import { claims, players } from "@/db/schema";
 import { db } from "@/lib/server/db";
 import { deliverEmail, queueResend } from "@/lib/server/email/deliver";
 import { checkEmail } from "@/lib/server/email-address";
 import { readBody, requestContext, tooMany, withErrors } from "@/lib/server/http";
 import { log } from "@/lib/server/log";
-import { findPlayerByToken } from "@/lib/server/players";
+import { findPlayerByToken, type Player } from "@/lib/server/players";
 import { rateLimit } from "@/lib/server/rate-limit";
 import { emailKey } from "@/lib/server/tokens";
 
@@ -28,16 +26,13 @@ export const POST = withErrors("claim_resend", async (request: Request) => {
   if (!parsed.ok) return parsed.response;
 
   const q = db();
-  let player: typeof players.$inferSelect | null = null;
+  let player: Player | null = null;
   if (parsed.data.email) {
     const check = checkEmail(parsed.data.email);
     if (!check.ok) return accepted();
     // Count the attempt before looking the address up, so known and unknown addresses match.
     if (!(await rateLimit("resendEmail", emailKey(check.normalized))).ok) return accepted();
-    [player] = await q
-      .select()
-      .from(players)
-      .where(and(eq(players.emailNormalized, check.normalized), isNull(players.deletedAt)));
+    player = await q.players.findOne({ emailNormalized: check.normalized, deletedAt: null });
   } else {
     player = await findPlayerByToken(q, ctx.playerToken);
     if (player && !(await rateLimit("resendEmail", emailKey(player.emailNormalized))).ok) {
@@ -46,16 +41,15 @@ export const POST = withErrors("claim_resend", async (request: Request) => {
   }
   if (!player || player.emailBlockedAt) return accepted();
 
-  const owned = await q
-    .select({ id: claims.id })
-    .from(claims)
-    .where(and(eq(claims.playerId, player.id), isNotNull(claims.codeId)));
+  const owned = await q.claims
+    .find({ playerId: player._id, codeId: { $ne: null } }, { projection: { _id: 1 } })
+    .toArray();
   if (owned.length === 0) return accepted();
 
   const emailId = await queueResend(
     q,
-    player.id,
-    owned.map((c) => c.id),
+    player._id,
+    owned.map((c) => c._id),
     player.language,
     null,
   );

@@ -3,7 +3,7 @@
  * (SEC-09). Details hold ids and settings, never a player's email or name.
  */
 import type { Queryable } from "@/db/client";
-import { adminAudit } from "@/db/schema";
+import { newAdminAudit } from "@/db/schema";
 
 export async function audit(
   q: Queryable,
@@ -12,5 +12,5 @@ export async function audit(
   target: string | null = null,
   details: Record<string, unknown> = {},
 ): Promise<void> {
-  await q.insert(adminAudit).values({ adminEmail: admin, action, target, details });
+  await q.adminAudit.insertOne(newAdminAudit({ adminEmail: admin, action, target, details }));
 }

@@ -1,20 +1,15 @@
-import path from "node:path";
-import { drizzle } from "drizzle-orm/postgres-js";
-import { migrate } from "drizzle-orm/postgres-js/migrator";
-import postgres from "postgres";
+import { createDb } from "./client";
+import { runMigrations } from "./migrations";
 
 /**
- * Scripts, tests and Playwright all run from site/. (`import.meta.url` would be neater, but
- * Playwright loads this file as CommonJS.)
+ * Applies every pending migration (./migrations.ts). Needs a user that can create collections
+ * and indexes: the migrations URL, not the app's least-privilege one. Returns the ids applied.
  */
-export const MIGRATIONS_DIR = path.resolve("db/migrations");
-
-/** Applies every pending migration in ./migrations. Needs a session-mode connection. */
-export async function migrateDb(url: string): Promise<void> {
-  const client = postgres(url, { max: 1, onnotice: () => {} });
+export async function migrateDb(url: string): Promise<string[]> {
+  const { db, client } = createDb(url, { max: 1 });
   try {
-    await migrate(drizzle(client), { migrationsFolder: MIGRATIONS_DIR });
+    return await runMigrations(db);
   } finally {
-    await client.end();
+    await client.close();
   }
 }

@@ -45,9 +45,9 @@ export default async function AuditPage({
               </thead>
               <tbody>
                 {shown.map((r) => (
-                  <tr key={String(r.id)}>
-                    <td>{formatMontreal(new Date(r.created_at))}</td>
-                    <td>{r.admin_email}</td>
+                  <tr key={r.id}>
+                    <td>{formatMontreal(r.createdAt)}</td>
+                    <td>{r.adminEmail}</td>
                     <td className="adm-mono">{r.action}</td>
                     <td className="adm-mono">{r.target ?? "—"}</td>
                     <td className="adm-mono" style={{ maxWidth: 420, overflowWrap: "anywhere" }}>

@@ -4,9 +4,7 @@
  * change is audited with before and after. Thresholds reach only runs started afterwards (they
  * travel in the run token); switches act on claims at once.
  */
-import { eq } from "drizzle-orm";
 import type { Db } from "@/db/client";
-import { campaignSettings, rewards } from "@/db/schema";
 import { REWARD_IDS, type RewardId } from "@/game-core";
 import { clearCampaignCache } from "../campaign";
 import { audit } from "./audit";
@@ -35,11 +33,11 @@ export const LIMITS = {
 } as const;
 
 export async function loadSettings(q: Db): Promise<CampaignSettingsValue> {
-  const [s] = await q.select().from(campaignSettings).where(eq(campaignSettings.id, 1));
-  const rows = await q.select().from(rewards);
+  const s = await q.campaignSettings.findOne({ _id: 1 });
+  const rows = await q.rewards.find().toArray();
   const out = {} as Record<RewardId, RewardSettings>;
   for (const id of REWARD_IDS) {
-    const row = rows.find((r) => r.id === id);
+    const row = rows.find((r) => r._id === id);
     const rule = (row?.rule ?? {}) as { distanceM?: number; garlic?: number };
     out[id] = {
       active: row?.active ?? false,
@@ -172,29 +170,33 @@ export async function saveSettings(
   const changes = diff(before, value);
   if (changes.length === 0) return [];
   await q.transaction(async (tx) => {
-    await tx
-      .update(campaignSettings)
-      .set({
-        startsAt: value.startsAt,
-        endsAt: value.endsAt,
-        claimsEnabled: value.claimsEnabled,
-        retentionDays: value.retentionDays,
-        alertEmails: value.alertEmails,
-        updatedAt: now,
-        updatedBy: admin,
-      })
-      .where(eq(campaignSettings.id, 1));
+    await tx.campaignSettings.updateOne(
+      { _id: 1 },
+      {
+        $set: {
+          startsAt: value.startsAt,
+          endsAt: value.endsAt,
+          claimsEnabled: value.claimsEnabled,
+          retentionDays: value.retentionDays,
+          alertEmails: value.alertEmails,
+          updatedAt: now,
+          updatedBy: admin,
+        },
+      },
+    );
     for (const id of REWARD_IDS) {
       const r = value.rewards[id];
-      await tx
-        .update(rewards)
-        .set({
-          active: r.active,
-          rule: id === "free_coke" ? { distanceM: r.threshold } : { garlic: r.threshold },
-          validityDays: r.validityDays,
-          updatedAt: now,
-        })
-        .where(eq(rewards.id, id));
+      await tx.rewards.updateOne(
+        { _id: id },
+        {
+          $set: {
+            active: r.active,
+            rule: id === "free_coke" ? { distanceM: r.threshold } : { garlic: r.threshold },
+            validityDays: r.validityDays,
+            updatedAt: now,
+          },
+        },
+      );
     }
     for (const c of changes) {
       const action = c.field.endsWith(".active")

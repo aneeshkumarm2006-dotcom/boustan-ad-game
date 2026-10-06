@@ -3,9 +3,7 @@
  * (default 20% and 5%). Crossing one sends one email to the alert recipients; the level is
  * remembered so the same threshold doesn't send twice, and adding codes re-arms it.
  */
-import { eq } from "drizzle-orm";
 import type { Db } from "@/db/client";
-import { campaignSettings, rewards } from "@/db/schema";
 import { env } from "../env";
 import { log } from "../log";
 import { escapeHtml } from "../pages";
@@ -33,7 +31,7 @@ export function percentLeft(p: Pick<PoolStats, "total" | "void" | "available">):
 
 /** Alert recipients from the settings; ADMIN_EMAILS when none are set. */
 export async function recipients(q: Db): Promise<string[]> {
-  const [s] = await q.select().from(campaignSettings).where(eq(campaignSettings.id, 1));
+  const s = await q.campaignSettings.findOne({ _id: 1 });
   const custom = s?.alertEmails ?? [];
   return custom.length > 0 ? custom : env().adminEmails;
 }
@@ -46,7 +44,7 @@ export async function runStockAlerts(
   const to = await recipients(q);
   const out: StockAlertResult[] = [];
   const setLevel = (reward: string, alertLevel: number | null) =>
-    q.update(rewards).set({ alertLevel }).where(eq(rewards.id, reward));
+    q.rewards.updateOne({ _id: reward }, { $set: { alertLevel } });
 
   for (const pool of await poolStats(q)) {
     // A pool that never had codes isn't "low", it just isn't set up yet.

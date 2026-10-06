@@ -1,6 +1,4 @@
-import { eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { claims, consents, emailOutbox, events, players } from "@/db/schema";
 import { BOTH, connect, ctx, finish, resetDb, seedCampaign } from "@/tests/db";
 import { claimRewards } from "../claims";
 import { deliverEmail, dueEmails, queueResend, retryDelayMs } from "./deliver";
@@ -43,8 +41,8 @@ async function claimed(marketingOptIn = false) {
   return res;
 }
 
-const outbox = async (id: string) =>
-  (await db.select().from(emailOutbox).where(eq(emailOutbox.id, id)))[0];
+const outbox = async (id: string) => (await db.emailOutbox.findOne({ _id: id }))!;
+const claimIds = async () => (await db.claims.find().toArray()).map((c) => c._id);
 
 describe("coupon email delivery (MAIL-02, MAIL-05, MAIL-07)", () => {
   it("sends one email with every code to the address as typed", async () => {
@@ -62,9 +60,9 @@ describe("coupon email delivery (MAIL-02, MAIL-05, MAIL-07)", () => {
       providerId: "re_1",
       attempts: 1,
     });
-    const rows = await db.select().from(claims);
+    const rows = await db.claims.find().toArray();
     expect(rows.every((c) => c.emailStatus === "sent")).toBe(true);
-    expect(await db.select().from(events).where(eq(events.name, "email_sent"))).toHaveLength(1);
+    expect(await db.events.find({ name: "email_sent" }).toArray()).toHaveLength(1);
   });
 
   it("never sends the same row twice, even if called again", async () => {
@@ -94,7 +92,24 @@ describe("coupon email delivery (MAIL-02, MAIL-05, MAIL-07)", () => {
     const late = new Date(row.createdAt.getTime() + 24 * 3_600_000);
     expect(await deliverEmail(db, res.emailId!, send, late)).toBe("failed");
     expect((await outbox(res.emailId!)).status).toBe("failed");
-    expect((await db.select().from(claims))[0].emailStatus).toBe("failed");
+    expect((await db.claims.findOne())!.emailStatus).toBe("failed");
+  });
+
+  it("takes back a row whose sender died, once its lease has run out", async () => {
+    const res = await claimed();
+    const { sent, send } = recordingSender();
+    const t0 = new Date();
+    // A sender takes the row and dies before finishing it.
+    await db.emailOutbox.updateOne(
+      { _id: res.emailId! },
+      { $set: { status: "sending", leaseUntil: new Date(t0.getTime() + 60_000) } },
+    );
+    expect(await dueEmails(db, t0)).toEqual([]);
+    expect(await deliverEmail(db, res.emailId!, send, t0)).toBe("skipped");
+    const later = new Date(t0.getTime() + 61_000);
+    expect(await dueEmails(db, later)).toEqual([res.emailId]);
+    expect(await deliverEmail(db, res.emailId!, send, later)).toBe("sent");
+    expect(sent).toHaveLength(1);
   });
 
   it("doesn't retry errors a retry can't fix", async () => {
@@ -105,13 +120,21 @@ describe("coupon email delivery (MAIL-02, MAIL-05, MAIL-07)", () => {
 
   it("re-sends earlier codes to the stored address (MAIL-08)", async () => {
     const res = await claimed();
-    const ids = (await db.select({ id: claims.id }).from(claims)).map((c) => c.id);
-    const resendId = await queueResend(db, res.playerId, ids, "fr", null);
+    const resendId = await queueResend(db, res.playerId, await claimIds(), "fr", null);
     const { sent, send } = recordingSender();
     expect(await deliverEmail(db, resendId!, send)).toBe("sent");
     expect(sent[0].to).toBe("Coupon.Fan@gmail.com");
     expect(sent[0].subject).toBe("Votre Coke et votre sauce à l'ail gratuits vous attendent");
     expect(sent[0].text).toContain("voici de nouveau vos codes");
+  });
+
+  it("adds codes to an email that hasn't gone out yet", async () => {
+    const res = await claimed();
+    const [first, second] = await claimIds();
+    const resendId = await queueResend(db, res.playerId, [first], "fr", null);
+    expect(await queueResend(db, res.playerId, [second], "fr", resendId)).toBe(resendId);
+    expect((await outbox(resendId!)).claimIds).toEqual([first, second]);
+    expect(await queueResend(db, res.playerId, [], "fr", null)).toBeNull();
   });
 });
 
@@ -124,15 +147,14 @@ describe("bounce and complaint webhook (MAIL-07)", () => {
       type: "email.bounced",
       data: { email_id: "re_1", to: ["coupon.fan@gmail.com"], bounce: { type: "Permanent" } },
     });
-    const [player] = await db.select().from(players);
+    const player = (await db.players.findOne())!;
     expect(player.emailBlockReason).toBe("bounced");
 
-    const ids = (await db.select({ id: claims.id }).from(claims)).map((c) => c.id);
-    const resendId = await queueResend(db, res.playerId, ids, "en", null);
+    const resendId = await queueResend(db, res.playerId, await claimIds(), "en", null);
     const second = recordingSender();
     expect(await deliverEmail(db, resendId!, second.send)).toBe("blocked");
     expect(second.sent).toHaveLength(0);
-    expect(await db.select().from(events).where(eq(events.name, "email_bounced"))).toHaveLength(1);
+    expect(await db.events.find({ name: "email_bounced" }).toArray()).toHaveLength(1);
   });
 
   it("ignores soft bounces", async () => {
@@ -141,15 +163,15 @@ describe("bounce and complaint webhook (MAIL-07)", () => {
       type: "email.bounced",
       data: { to: ["coupon.fan@gmail.com"], bounce: { type: "Transient" } },
     });
-    expect((await db.select().from(players))[0].emailBlockedAt).toBeNull();
+    expect((await db.players.findOne())!.emailBlockedAt).toBeNull();
   });
 
   it("a complaint also withdraws marketing consent (CASL)", async () => {
     await claimed(true);
     await handleEmailEvent(db, { type: "email.complained", data: { to: ["CouponFan@gmail.com"] } });
-    const [player] = await db.select().from(players);
+    const player = (await db.players.findOne())!;
     expect(player).toMatchObject({ marketingOptIn: false, emailBlockReason: "complained" });
-    const last = (await db.select().from(consents).orderBy(consents.id)).at(-1);
+    const last = (await db.consents.find().sort({ _id: 1 }).toArray()).at(-1);
     expect(last).toMatchObject({ kind: "marketing", granted: false, source: "complaint" });
   });
 });

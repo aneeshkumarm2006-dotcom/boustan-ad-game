@@ -16,8 +16,8 @@ const optional = z
   .transform((v) => (v && v.trim() !== "" ? v.trim() : undefined));
 
 const schema = z.object({
-  DATABASE_URL: z.string().min(1),
-  DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(50).optional(),
+  MONGODB_URI: z.string().regex(/^mongodb(\+srv)?:\/\//),
+  MONGODB_POOL_MAX: z.coerce.number().int().min(1).max(50).optional(),
   RUN_TOKEN_SECRET: z.string().min(32, "RUN_TOKEN_SECRET must be at least 32 characters"),
   TURNSTILE_SECRET: optional,
   EMAIL_API_KEY: optional,

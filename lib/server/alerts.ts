@@ -3,9 +3,7 @@
  * hour, and a bounce spike in the last day. A breach becomes a Sentry event with a fixed
  * fingerprint, so a Sentry issue alert rule can page whoever is on call.
  */
-import { and, eq, gte, sql } from "drizzle-orm";
 import type { Queryable } from "@/db/client";
-import { events } from "@/db/schema";
 import { captureMessage } from "./sentry";
 import { log } from "./log";
 
@@ -24,17 +22,11 @@ export interface AlertResult {
 }
 
 async function count(q: Queryable, name: string, since: Date, outcome?: string): Promise<number> {
-  const [row] = await q
-    .select({ n: sql<number>`count(*)::int` })
-    .from(events)
-    .where(
-      and(
-        eq(events.name, name),
-        gte(events.createdAt, since),
-        outcome ? sql`${events.props}->>'outcome' = ${outcome}` : undefined,
-      ),
-    );
-  return row?.n ?? 0;
+  return q.events.countDocuments({
+    name,
+    createdAt: { $gte: since },
+    ...(outcome ? { "props.outcome": outcome } : {}),
+  });
 }
 
 export async function checkAlerts(q: Queryable, now = new Date()): Promise<AlertResult[]> {

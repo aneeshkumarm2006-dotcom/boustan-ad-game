@@ -1,7 +1,7 @@
 /**
  * Campaign switches without a redeploy (SEC-08, ADM-07), until the admin screens exist. Every
- * change is written to admin_audit (SEC-09). The same columns can be edited in Supabase Studio;
- * this keeps the audit trail.
+ * change is written to admin_audit (SEC-09). The same fields can be edited in Atlas or
+ * mongosh; this keeps the audit trail.
  *
  *   npm run campaign -- status
  *   npm run campaign -- claims on|off                    global kill switch
@@ -14,10 +14,10 @@
  * run-start cache can show the old state for up to 5 s).
  */
 import os from "node:os";
-import { eq, sql } from "drizzle-orm";
 import { createDb } from "../db/client";
-import { adminAudit, campaignSettings, rewards } from "../db/schema";
+import { newAdminAudit, type CampaignSettingsDoc } from "../db/schema";
 import { isRewardId } from "../game-core";
+import { poolStats } from "../lib/server/admin/pools";
 import { fail, loadLocalEnv, scriptDatabaseUrl } from "./local-env";
 
 const USAGE = `Usage: npm run campaign -- status | claims on|off | reward <id> on|off |
@@ -47,12 +47,14 @@ async function main() {
   const actor = process.env.CAMPAIGN_ACTOR || `cli:${os.userInfo().username}`;
   const { db, client } = createDb(scriptDatabaseUrl(), { max: 1 });
   const audit = (action: string, target: string, details: Record<string, unknown>) =>
-    db.insert(adminAudit).values({ adminEmail: actor, action, target, details });
-  const settings = (set: Partial<typeof campaignSettings.$inferInsert>) =>
-    db
-      .update(campaignSettings)
-      .set({ ...set, updatedAt: new Date(), updatedBy: actor })
-      .where(eq(campaignSettings.id, 1));
+    db.adminAudit.insertOne(newAdminAudit({ adminEmail: actor, action, target, details }));
+  const settings = (set: Partial<CampaignSettingsDoc>) =>
+    db.campaignSettings.updateOne(
+      { _id: 1 },
+      { $set: { ...set, updatedAt: new Date(), updatedBy: actor } },
+    );
+  const reward = (id: string, set: Record<string, unknown>) =>
+    db.rewards.updateOne({ _id: id }, { $set: { ...set, updatedAt: new Date() } });
   try {
     switch (command) {
       case "status":
@@ -77,7 +79,7 @@ async function main() {
       case "reward": {
         const id = rewardId(a);
         const active = onOff(b);
-        await db.update(rewards).set({ active, updatedAt: new Date() }).where(eq(rewards.id, id));
+        await reward(id, { active });
         await audit("reward.active", id, { active });
         break;
       }
@@ -86,7 +88,7 @@ async function main() {
         const n = Number(b);
         if (!Number.isFinite(n) || n <= 0) fail("The threshold must be a positive number.");
         const rule = id === "free_coke" ? { distanceM: n } : { garlic: Math.round(n) };
-        await db.update(rewards).set({ rule, updatedAt: new Date() }).where(eq(rewards.id, id));
+        await reward(id, { rule });
         await audit("reward.threshold", id, rule);
         break;
       }
@@ -94,10 +96,7 @@ async function main() {
         const id = rewardId(a);
         const days = Number(b);
         if (!Number.isInteger(days) || days <= 0) fail("Validity is a whole number of days.");
-        await db
-          .update(rewards)
-          .set({ validityDays: days, updatedAt: new Date() })
-          .where(eq(rewards.id, id));
+        await reward(id, { validityDays: days });
         await audit("reward.validity", id, { validityDays: days });
         break;
       }
@@ -105,33 +104,23 @@ async function main() {
         fail(USAGE);
     }
 
-    const [s] = await db.select().from(campaignSettings).where(eq(campaignSettings.id, 1));
+    const s = await db.campaignSettings.findOne({ _id: 1 });
     console.log("Campaign");
     console.log(`  starts:  ${s?.startsAt?.toISOString() ?? "(not set)"}`);
     console.log(`  ends:    ${s?.endsAt?.toISOString() ?? "(not set)"}`);
     console.log(`  claims:  ${s?.claimsEnabled ? "ON" : "OFF"}`);
-    const stock = await db.execute<{
-      reward_id: string;
-      active: boolean;
-      total: number;
-      available: number;
-      assigned: number;
-    }>(
-      sql`select reward_id, active, total::int, available::int, assigned::int from v_code_stock order by reward_id`,
-    );
-    const rules = await db
-      .select({ id: rewards.id, rule: rewards.rule, validityDays: rewards.validityDays })
-      .from(rewards);
+    const stock = await poolStats(db);
+    const rules = await db.rewards.find().toArray();
     console.log("Rewards");
     for (const r of stock) {
-      const rule = rules.find((x) => x.id === r.reward_id);
+      const rule = rules.find((x) => x._id === r.reward);
       console.log(
-        `  ${r.reward_id.padEnd(18)} ${r.active ? "ON " : "OFF"}  rule ${JSON.stringify(rule?.rule)}  ` +
+        `  ${r.reward.padEnd(18)} ${r.active ? "ON " : "OFF"}  rule ${JSON.stringify(rule?.rule)}  ` +
           `valid ${rule?.validityDays ?? "-"} d  codes ${r.available}/${r.total} left, ${r.assigned} issued`,
       );
     }
   } finally {
-    await client.end();
+    await client.close();
   }
 }
 

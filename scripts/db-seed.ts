@@ -11,9 +11,8 @@
  */
 import { randomBytes } from "node:crypto";
 import os from "node:os";
-import { eq, sql } from "drizzle-orm";
 import { createDb } from "../db/client";
-import { adminAudit, campaignSettings, codes, rewards } from "../db/schema";
+import { newAdminAudit, newCode } from "../db/schema";
 import { DEFAULT_REWARD_RULES, REWARD_IDS } from "../game-core";
 import { createTranslator } from "../i18n";
 import { fail, loadLocalEnv, scriptDatabaseUrl } from "./local-env";
@@ -43,23 +42,29 @@ async function main() {
     const fr = createTranslator("fr");
     const en = createTranslator("en");
     for (const [i, id] of REWARD_IDS.entries()) {
-      await db
-        .insert(rewards)
-        .values({
-          id,
-          names: { fr: fr.t(`reward.${id}.name`), en: en.t(`reward.${id}.name`) },
-          terms: { fr: fr.t(`reward.${id}.terms`), en: en.t(`reward.${id}.terms`) },
-          rule:
-            id === "free_coke"
-              ? { distanceM: DEFAULT_REWARD_RULES.free_coke.distanceM }
-              : { garlic: DEFAULT_REWARD_RULES.free_garlic_sauce.garlic },
-          validityDays: 30,
-          sortOrder: i,
-        })
-        .onConflictDoUpdate({
-          target: rewards.id,
-          set: { names: sql`excluded.names`, terms: sql`excluded.terms`, updatedAt: new Date() },
-        });
+      const names = { fr: fr.t(`reward.${id}.name`), en: en.t(`reward.${id}.name`) };
+      const terms = { fr: fr.t(`reward.${id}.terms`), en: en.t(`reward.${id}.terms`) };
+      // A new reward gets the defaults; an existing one only has its texts refreshed.
+      await db.rewards.updateOne(
+        { _id: id },
+        {
+          $set: { names, terms, updatedAt: new Date() },
+          $setOnInsert: {
+            rule:
+              id === "free_coke"
+                ? { distanceM: DEFAULT_REWARD_RULES.free_coke.distanceM }
+                : { garlic: DEFAULT_REWARD_RULES.free_garlic_sauce.garlic },
+            active: true,
+            validityDays: 30,
+            validUntil: null,
+            maxPerPlayer: 1,
+            alertThresholds: [20, 5],
+            alertLevel: null,
+            sortOrder: i,
+          },
+        },
+        { upsert: true },
+      );
     }
     console.log(`Rewards: ${REWARD_IDS.join(", ")}`);
 
@@ -67,44 +72,57 @@ async function main() {
       const now = new Date();
       const startsAt = new Date(now.getTime() - 60_000);
       const endsAt = new Date(now.getTime() + 30 * 86_400_000);
-      await db
-        .update(campaignSettings)
-        .set({ startsAt, endsAt, claimsEnabled: true, updatedAt: now, updatedBy: actor })
-        .where(eq(campaignSettings.id, 1));
-      await db.insert(adminAudit).values({
-        adminEmail: actor,
-        action: "campaign.seed_open",
-        target: "campaign_settings",
-        details: { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() },
-      });
+      await db.campaignSettings.updateOne(
+        { _id: 1 },
+        {
+          $set: { startsAt, endsAt, claimsEnabled: true, updatedAt: now, updatedBy: actor },
+          $setOnInsert: { alertEmails: [], retentionDays: 90 },
+        },
+        { upsert: true },
+      );
+      await db.adminAudit.insertOne(
+        newAdminAudit({
+          adminEmail: actor,
+          action: "campaign.seed_open",
+          target: "campaign_settings",
+          details: { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() },
+        }),
+      );
       console.log(`Campaign open until ${endsAt.toISOString()}, claims on`);
     }
 
     if (testCodes > 0) {
       const batch = `test-${new Date().toISOString().slice(0, 10)}`;
       for (const id of REWARD_IDS) {
-        const rows = Array.from({ length: testCodes }, () => ({
-          rewardId: id,
-          code: testCode(),
-          batch,
-        }));
+        const rows = Array.from({ length: testCodes }, () =>
+          newCode({ rewardId: id, code: testCode(), batch }),
+        );
         for (let i = 0; i < rows.length; i += 500) {
-          await db
-            .insert(codes)
-            .values(rows.slice(i, i + 500))
-            .onConflictDoNothing();
+          // A code that already exists is left alone.
+          await db.codes.bulkWrite(
+            rows.slice(i, i + 500).map((doc) => ({
+              updateOne: {
+                filter: { code: doc.code },
+                update: { $setOnInsert: doc },
+                upsert: true,
+              },
+            })),
+            { ordered: false },
+          );
         }
       }
-      await db.insert(adminAudit).values({
-        adminEmail: actor,
-        action: "codes.seed_test",
-        target: "codes",
-        details: { perReward: testCodes, batch },
-      });
+      await db.adminAudit.insertOne(
+        newAdminAudit({
+          adminEmail: actor,
+          action: "codes.seed_test",
+          target: "codes",
+          details: { perReward: testCodes, batch },
+        }),
+      );
       console.log(`Added ${testCodes} TEST- codes per reward (batch ${batch})`);
     }
   } finally {
-    await client.end();
+    await client.close();
   }
 }
 

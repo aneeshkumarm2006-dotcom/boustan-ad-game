@@ -25,7 +25,7 @@ export default defineConfig({
         },
       },
       {
-        // Needs Postgres: TEST_DATABASE_URL, or a throwaway embedded server (tests/db-setup.ts).
+        // Needs a MongoDB replica set: TEST_MONGODB_URI, or a throwaway in-memory one (tests/db-setup.ts).
         extends: true,
         test: {
           name: "db",

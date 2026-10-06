@@ -1,7 +1,15 @@
 /**
- * Database schema (PRD §15.2), Postgres through Drizzle. Migrations in ./migrations are
- * generated from this file (`npm run db:generate`); the consent-log trigger, CHECK constraints
- * on enums and the reporting views live in hand-written migrations next to them.
+ * Database schema (PRD §15.2), MongoDB through the official driver. Collections, indexes and
+ * validators are created by `npm run db:migrate` (see ./migrations.ts); this file is their single
+ * source of truth.
+ *
+ * MongoDB has no column defaults, so every `new*` builder below fills them in. Insert through the
+ * builders and a document always carries every field, with `null` for "no value".
+ *
+ * Ids: players, runs, claims and emails use a UUID string as `_id`. Codes, consents and the
+ * outboxes use an ObjectId, which sorts in insertion order (the oldest code goes first, RWD-03).
+ * Player tokens use the token hash as `_id` and best runs use the player's id, so the database
+ * itself keeps them to one per token and one per player.
  *
  * Additions to §15.2:
  * - `player_tokens`: one row per device, so a second host site or phone gets its own token
@@ -11,28 +19,8 @@
  * - `email_outbox`: coupon emails waiting to be sent or retried (MAIL-02, MAIL-07).
  * - `events_daily`: the daily analytics rollup (AN-02).
  */
-import { sql } from "drizzle-orm";
-import {
-  bigint,
-  bigserial,
-  boolean,
-  check,
-  date,
-  doublePrecision,
-  index,
-  integer,
-  jsonb,
-  pgTable,
-  primaryKey,
-  smallint,
-  text,
-  timestamp,
-  uniqueIndex,
-  uuid,
-} from "drizzle-orm/pg-core";
-
-const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
-const tstz = (name: string) => timestamp(name, { withTimezone: true });
+import { randomUUID } from "node:crypto";
+import { ObjectId, type CreateIndexesOptions, type Document } from "mongodb";
 
 export type Utm = Partial<
   Record<"utm_source" | "utm_medium" | "utm_campaign" | "utm_content", string>
@@ -45,384 +33,704 @@ export interface RunRules {
 export type Localized = { fr: string; en: string };
 export type RewardRule = { distanceM: number } | { garlic: number };
 
+/** Collection names by the key the app uses for them (`db.players`, `tx.bestRuns`...). */
+export const COLLECTIONS = {
+  players: "players",
+  playerTokens: "player_tokens",
+  consents: "consents",
+  runs: "runs",
+  bestRuns: "best_runs",
+  campaignSettings: "campaign_settings",
+  rewards: "rewards",
+  codes: "codes",
+  claims: "claims",
+  emailOutbox: "email_outbox",
+  crmOutbox: "crm_outbox",
+  events: "events",
+  eventsDaily: "events_daily",
+  adminAudit: "admin_audit",
+} as const;
+export type CollectionKey = keyof typeof COLLECTIONS;
+
+/**
+ * Stands in for "no expiry" when an aggregation compares a code's `expiresAt`, which is null
+ * for codes that never expire: `{ $ifNull: ["$expiresAt", NO_EXPIRY] }` then compares as a date.
+ */
+export const NO_EXPIRY = new Date(8.64e15);
+
 // ---------------------------------------------------------------------------------------------
 // Players and consent
 // ---------------------------------------------------------------------------------------------
 
-export const players = pgTable(
-  "players",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    /** As typed; the only address emails go to (RWD-05, MAIL-08). */
-    email: text("email").notNull(),
-    /** One claim per person per reward (SEC-07). Anonymized when a player is deleted. */
-    emailNormalized: text("email_normalized").notNull(),
-    nickname: text("nickname"),
-    /** Moderated off the leaderboard; stays hidden if they come back with the same email (LB-07). */
-    hidden: boolean("hidden").notNull().default(false),
-    language: text("language").notNull(),
-    ageConfirmedAt: tstz("age_confirmed_at"),
-    marketingOptIn: boolean("marketing_opt_in").notNull().default(false),
-    firstSrc: text("first_src"),
-    firstHost: text("first_host"),
-    utm: jsonb("utm").$type<Utm>().notNull().default({}),
-    /** Set by a hard bounce, complaint or suppression; no email is sent after that (MAIL-07). */
-    emailBlockedAt: tstz("email_blocked_at"),
-    emailBlockReason: text("email_block_reason"),
-    /** pending | synced | failed | skipped (DATA-02, CRM-05). */
-    crmStatus: text("crm_status").notNull().default("pending"),
-    crmSyncedAt: tstz("crm_synced_at"),
-    createdAt: createdAt(),
-    lastSeenAt: tstz("last_seen_at").notNull().defaultNow(),
-    deletedAt: tstz("deleted_at"),
-  },
-  (t) => [uniqueIndex("players_email_normalized_key").on(t.emailNormalized)],
-);
+export interface PlayerDoc {
+  _id: string;
+  /** As typed; the only address emails go to (RWD-05, MAIL-08). */
+  email: string;
+  /** One claim per person per reward (SEC-07). Anonymized when a player is deleted. */
+  emailNormalized: string;
+  nickname: string | null;
+  /** Moderated off the leaderboard; stays hidden if they come back with the same email (LB-07). */
+  hidden: boolean;
+  language: string;
+  ageConfirmedAt: Date | null;
+  marketingOptIn: boolean;
+  firstSrc: string | null;
+  firstHost: string | null;
+  utm: Utm;
+  /** Set by a hard bounce, complaint or suppression; no email is sent after that (MAIL-07). */
+  emailBlockedAt: Date | null;
+  emailBlockReason: string | null;
+  /** pending | synced | failed | skipped (DATA-02, CRM-05). */
+  crmStatus: string;
+  crmSyncedAt: Date | null;
+  createdAt: Date;
+  lastSeenAt: Date;
+  deletedAt: Date | null;
+}
 
-export const playerTokens = pgTable(
-  "player_tokens",
-  {
-    /** SHA-256 of the token, hex. The token itself only lives on the device. */
-    tokenHash: text("token_hash").primaryKey(),
-    playerId: uuid("player_id")
-      .notNull()
-      .references(() => players.id),
-    createdAt: createdAt(),
-    lastUsedAt: tstz("last_used_at").notNull().defaultNow(),
-  },
-  (t) => [index("player_tokens_player_idx").on(t.playerId)],
-);
+export interface PlayerTokenDoc {
+  /** SHA-256 of the token, hex. The token itself only lives on the device. */
+  _id: string;
+  playerId: string;
+  createdAt: Date;
+  lastUsedAt: Date;
+}
 
 /**
- * Append-only proof of consent (DATA-03, CASL). A trigger rejects UPDATE and DELETE; the
- * retention job (DATA-06) is the only thing allowed to delete, and it has to say so.
+ * Append-only proof of consent (DATA-03, CASL). Nothing in the app updates a row; only erasing a
+ * player (DATA-07) or the retention job (DATA-06) deletes. The app's database user gets no
+ * `update` on this collection (db/roles.ts).
  */
-export const consents = pgTable(
-  "consents",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    playerId: uuid("player_id")
-      .notNull()
-      .references(() => players.id),
-    /** terms_age | marketing */
-    kind: text("kind").notNull(),
-    granted: boolean("granted").notNull(),
-    /** Exactly what the player saw, without markup. */
-    text: text("text").notNull(),
-    textVersion: text("text_version").notNull(),
-    language: text("language").notNull(),
-    /** claim_form | unsubscribe | complaint */
-    source: text("source").notNull(),
-    ip: text("ip"),
-    userAgent: text("user_agent"),
-    hostOrigin: text("host_origin"),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    index("consents_player_idx").on(t.playerId, t.createdAt),
-    check("consents_kind_check", sql`${t.kind} in ('terms_age', 'marketing')`),
-  ],
-);
+export interface ConsentDoc {
+  _id: ObjectId;
+  playerId: string;
+  /** terms_age | marketing */
+  kind: string;
+  granted: boolean;
+  /** Exactly what the player saw, without markup. */
+  text: string;
+  textVersion: string;
+  language: string;
+  /** claim_form | unsubscribe | complaint */
+  source: string;
+  ip: string | null;
+  userAgent: string | null;
+  hostOrigin: string | null;
+  createdAt: Date;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Runs and the leaderboard
 // ---------------------------------------------------------------------------------------------
 
-export const runs = pgTable(
-  "runs",
-  {
-    /** The runId from the run token. Written once, on finish; the key blocks reuse (SEC-01). */
-    id: uuid("id").primaryKey(),
-    seed: bigint("seed", { mode: "number" }).notNull(),
-    playerId: uuid("player_id").references(() => players.id),
-    src: text("src"),
-    hostOrigin: text("host_origin"),
-    utm: jsonb("utm").$type<Utm>().notNull().default({}),
-    language: text("language"),
-    rules: jsonb("rules").$type<RunRules>().notNull(),
-    tuningVersion: smallint("tuning_version").notNull(),
-    issuedAt: tstz("issued_at").notNull(),
-    finishedAt: tstz("finished_at").notNull().defaultNow(),
-    activeMs: integer("active_ms").notNull(),
-    distanceM: doublePrecision("distance_m").notNull(),
-    garlic: integer("garlic").notNull(),
-    hits: integer("hits").notNull(),
-    /** valid | flagged (SEC-03) */
-    status: text("status").notNull(),
-    flagReason: text("flag_reason"),
-    clientVersion: text("client_version"),
-    /** Set when its claim token is spent, so each token works once (SEC-04). */
-    claimedAt: tstz("claimed_at"),
-  },
-  (t) => [
-    index("runs_player_idx").on(t.playerId),
-    index("runs_flagged_idx")
-      .on(t.finishedAt)
-      .where(sql`${t.status} = 'flagged'`),
-    check("runs_status_check", sql`${t.status} in ('valid', 'flagged')`),
-  ],
-);
+export interface RunDoc {
+  /** The runId from the run token. Written once, on finish; the key blocks reuse (SEC-01). */
+  _id: string;
+  seed: number;
+  playerId: string | null;
+  src: string | null;
+  hostOrigin: string | null;
+  utm: Utm;
+  language: string | null;
+  rules: RunRules;
+  tuningVersion: number;
+  issuedAt: Date;
+  finishedAt: Date;
+  activeMs: number;
+  distanceM: number;
+  garlic: number;
+  hits: number;
+  /** valid | flagged (SEC-03) */
+  status: string;
+  flagReason: string | null;
+  clientVersion: string | null;
+  /** Set when its claim token is spent, so each token works once (SEC-04). */
+  claimedAt: Date | null;
+}
 
 /** Each player's best validated run under the leaderboard order (LB-01, LB-02). */
-export const bestRuns = pgTable(
-  "best_runs",
-  {
-    playerId: uuid("player_id")
-      .primaryKey()
-      .references(() => players.id),
-    runId: uuid("run_id")
-      .notNull()
-      .references(() => runs.id),
-    garlic: integer("garlic").notNull(),
-    hits: integer("hits").notNull(),
-    distanceM: doublePrecision("distance_m").notNull(),
-    /** Ties go to whoever got there first (LB-01). */
-    achievedAt: tstz("achieved_at").notNull(),
-  },
-  (t) => [
-    index("best_runs_rank_idx").on(
-      t.garlic.desc(),
-      t.hits.asc(),
-      t.distanceM.desc(),
-      t.achievedAt.asc(),
-    ),
-  ],
-);
+export interface BestRunDoc {
+  /** The player's id: one best run per player. */
+  _id: string;
+  runId: string;
+  garlic: number;
+  hits: number;
+  distanceM: number;
+  /** Ties go to whoever got there first (LB-01). */
+  achievedAt: Date;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Campaign, rewards and codes
 // ---------------------------------------------------------------------------------------------
 
-/** One row (id = 1). Edited from SQL or `npm run campaign` until the admin exists (SEC-08). */
-export const campaignSettings = pgTable(
-  "campaign_settings",
-  {
-    id: smallint("id").primaryKey().default(1),
-    startsAt: tstz("starts_at"),
-    endsAt: tstz("ends_at"),
-    /** Global kill switch (SEC-08). Off until someone turns the campaign on. */
-    claimsEnabled: boolean("claims_enabled").notNull().default(false),
-    /** Who gets the low-stock emails (RWD-04, ADM-03). Blank: ADMIN_EMAILS. */
-    alertEmails: text("alert_emails")
-      .array()
-      .notNull()
-      .default(sql`'{}'::text[]`),
-    /** Days after the campaign ends before players who didn't opt in are anonymized (DATA-06). */
-    retentionDays: integer("retention_days").notNull().default(90),
-    updatedAt: tstz("updated_at").notNull().defaultNow(),
-    updatedBy: text("updated_by"),
-  },
-  (t) => [
-    check("campaign_settings_singleton", sql`${t.id} = 1`),
-    check("campaign_settings_retention_check", sql`${t.retentionDays} >= 0`),
-  ],
-);
+/** One document (_id = 1). Edited from the admin or `npm run campaign` (SEC-08). */
+export interface CampaignSettingsDoc {
+  _id: number;
+  startsAt: Date | null;
+  endsAt: Date | null;
+  /** Global kill switch (SEC-08). Off until someone turns the campaign on. */
+  claimsEnabled: boolean;
+  /** Who gets the low-stock emails (RWD-04, ADM-03). Blank: ADMIN_EMAILS. */
+  alertEmails: string[];
+  /** Days after the campaign ends before players who didn't opt in are anonymized (DATA-06). */
+  retentionDays: number;
+  updatedAt: Date;
+  updatedBy: string | null;
+}
 
 /** Reward catalogue (§5.1). Player-facing names and terms come from the i18n files. */
-export const rewards = pgTable(
-  "rewards",
-  {
-    /** free_coke | free_garlic_sauce (game-core REWARD_IDS) */
-    id: text("id").primaryKey(),
-    names: jsonb("names").$type<Localized>().notNull(),
-    terms: jsonb("terms").$type<Localized>().notNull(),
-    /** The unlock threshold for new runs (ADM-07). */
-    rule: jsonb("rule").$type<RewardRule>().notNull(),
-    /** Per-reward kill switch (SEC-08). */
-    active: boolean("active").notNull().default(true),
-    /** Codes expire this many days after they're issued, unless the code has its own date. */
-    validityDays: integer("validity_days"),
-    /** Or on this fixed date. */
-    validUntil: tstz("valid_until"),
-    /** Claims per player per campaign. The unique index on claims enforces 1. */
-    maxPerPlayer: smallint("max_per_player").notNull().default(1),
-    /** Low-stock emails go out when codes left fall to these percentages of the pool (RWD-04). */
-    alertThresholds: integer("alert_thresholds")
-      .array()
-      .notNull()
-      .default(sql`'{20,5}'::integer[]`),
-    /** The lowest threshold already announced, so each one sends once until stock is added. */
-    alertLevel: smallint("alert_level"),
-    sortOrder: smallint("sort_order").notNull().default(0),
-    updatedAt: tstz("updated_at").notNull().defaultNow(),
-  },
-  (t) => [check("rewards_max_per_player_check", sql`${t.maxPerPlayer} = 1`)],
-);
+export interface RewardDoc {
+  /** free_coke | free_garlic_sauce (game-core REWARD_IDS) */
+  _id: string;
+  names: Localized;
+  terms: Localized;
+  /** The unlock threshold for new runs (ADM-07). */
+  rule: RewardRule;
+  /** Per-reward kill switch (SEC-08). */
+  active: boolean;
+  /** Codes expire this many days after they're issued, unless the code has its own date. */
+  validityDays: number | null;
+  /** Or on this fixed date. */
+  validUntil: Date | null;
+  /** Claims per player per campaign. The unique index on claims enforces 1. */
+  maxPerPlayer: number;
+  /** Low-stock emails go out when codes left fall to these percentages of the pool (RWD-04). */
+  alertThresholds: number[];
+  /** The lowest threshold already announced, so each one sends once until stock is added. */
+  alertLevel: number | null;
+  sortOrder: number;
+  updatedAt: Date;
+}
 
 /** Single-use codes imported from uEat (RWD-01). The pool size is the budget (RWD-04). */
-export const codes = pgTable(
-  "codes",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    rewardId: text("reward_id")
-      .notNull()
-      .references(() => rewards.id),
-    code: text("code").notNull(),
-    batch: text("batch"),
-    expiresAt: tstz("expires_at"),
-    /** available | assigned | redeemed | void */
-    status: text("status").notNull().default("available"),
-    claimId: uuid("claim_id"),
-    assignedAt: tstz("assigned_at"),
-    redeemedAt: tstz("redeemed_at"),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    uniqueIndex("codes_code_key").on(t.code),
-    // The claim transaction takes the lowest available id with FOR UPDATE SKIP LOCKED (RWD-03).
-    index("codes_available_idx")
-      .on(t.rewardId, t.id)
-      .where(sql`${t.status} = 'available'`),
-    check("codes_status_check", sql`${t.status} in ('available', 'assigned', 'redeemed', 'void')`),
-  ],
-);
+export interface CodeDoc {
+  _id: ObjectId;
+  rewardId: string;
+  code: string;
+  batch: string | null;
+  expiresAt: Date | null;
+  /** available | assigned | redeemed | void */
+  status: string;
+  claimId: string | null;
+  assignedAt: Date | null;
+  redeemedAt: Date | null;
+  createdAt: Date;
+}
 
-export const claims = pgTable(
-  "claims",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    playerId: uuid("player_id")
-      .notNull()
-      .references(() => players.id),
-    rewardId: text("reward_id")
-      .notNull()
-      .references(() => rewards.id),
-    runId: uuid("run_id")
-      .notNull()
-      .references(() => runs.id),
-    /** Set in the same transaction, right after the row is created. */
-    codeId: bigint("code_id", { mode: "number" }).references(() => codes.id),
-    expiresAt: tstz("expires_at"),
-    /** pending | sent | failed | blocked */
-    emailStatus: text("email_status").notNull().default("pending"),
-    src: text("src"),
-    utm: jsonb("utm").$type<Utm>().notNull().default({}),
-    language: text("language").notNull(),
-    createdAt: createdAt(),
-  },
-  (t) => [
-    // One claim per normalized email per reward (SEC-07, RWD-05).
-    uniqueIndex("claims_player_reward_key").on(t.playerId, t.rewardId),
-    uniqueIndex("claims_code_key").on(t.codeId),
-    index("claims_run_idx").on(t.runId),
-  ],
-);
+export interface ClaimDoc {
+  _id: string;
+  playerId: string;
+  rewardId: string;
+  runId: string;
+  /** Set in the same transaction, right after the claim is created. */
+  codeId: ObjectId | null;
+  expiresAt: Date | null;
+  /** pending | sent | failed | blocked */
+  emailStatus: string;
+  src: string | null;
+  utm: Utm;
+  language: string;
+  createdAt: Date;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Outboxes
 // ---------------------------------------------------------------------------------------------
 
-/** Coupon emails (MAIL-02, MAIL-05, MAIL-07). One row per email, not per code. */
-export const emailOutbox = pgTable(
-  "email_outbox",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    playerId: uuid("player_id")
-      .notNull()
-      .references(() => players.id),
-    /** coupon | resend */
-    kind: text("kind").notNull(),
-    claimIds: uuid("claim_ids").array().notNull(),
-    language: text("language").notNull(),
-    /** pending | sending | retry | sent | failed | blocked */
-    status: text("status").notNull().default("pending"),
-    attempts: integer("attempts").notNull().default(0),
-    nextAttemptAt: tstz("next_attempt_at").notNull().defaultNow(),
-    /** A sender holds the row until then, so the cron and after() never send it twice. */
-    leaseUntil: tstz("lease_until"),
-    providerId: text("provider_id"),
-    lastError: text("last_error"),
-    createdAt: createdAt(),
-    sentAt: tstz("sent_at"),
-  },
-  (t) => [
-    index("email_outbox_due_idx")
-      .on(t.nextAttemptAt)
-      .where(sql`${t.status} in ('pending', 'retry', 'sending')`),
-    index("email_outbox_provider_idx").on(t.providerId),
-    index("email_outbox_player_idx").on(t.playerId),
-  ],
-);
+/** Coupon emails (MAIL-02, MAIL-05, MAIL-07). One document per email, not per code. */
+export interface EmailOutboxDoc {
+  _id: string;
+  playerId: string;
+  /** coupon | resend */
+  kind: string;
+  claimIds: string[];
+  language: string;
+  /** pending | sending | retry | sent | failed | blocked */
+  status: string;
+  attempts: number;
+  nextAttemptAt: Date;
+  /** A sender holds the document until then, so the cron and after() never send it twice. */
+  leaseUntil: Date | null;
+  providerId: string | null;
+  lastError: string | null;
+  createdAt: Date;
+  sentAt: Date | null;
+}
 
 /** CRM sync queue (CRM-05). Written in the claim and consent transactions; delivered in Stage 3. */
-export const crmOutbox = pgTable(
-  "crm_outbox",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    playerId: uuid("player_id")
-      .notNull()
-      .references(() => players.id),
-    /** contact_upsert | reward_claimed | consent_changed */
-    type: text("type").notNull(),
-    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
-    idempotencyKey: text("idempotency_key").notNull(),
-    /** pending | sent | failed | skipped */
-    status: text("status").notNull().default("pending"),
-    attempts: integer("attempts").notNull().default(0),
-    nextAttemptAt: tstz("next_attempt_at").notNull().defaultNow(),
-    lastError: text("last_error"),
-    createdAt: createdAt(),
-    sentAt: tstz("sent_at"),
-  },
-  (t) => [
-    uniqueIndex("crm_outbox_idempotency_key").on(t.idempotencyKey),
-    index("crm_outbox_due_idx")
-      .on(t.nextAttemptAt)
-      .where(sql`${t.status} = 'pending'`),
-  ],
-);
+export interface CrmOutboxDoc {
+  _id: ObjectId;
+  playerId: string;
+  /** contact_upsert | reward_claimed | consent_changed */
+  type: string;
+  payload: Record<string, unknown>;
+  idempotencyKey: string;
+  /** pending | sent | failed | skipped */
+  status: string;
+  attempts: number;
+  nextAttemptAt: Date;
+  lastError: string | null;
+  createdAt: Date;
+  sentAt: Date | null;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Analytics and audit
 // ---------------------------------------------------------------------------------------------
 
 /** First-party analytics (AN-01). No personal data: names, small props, placement and device. */
-export const events = pgTable(
-  "events",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    /** In-memory client session; null for server events. */
-    sessionId: text("session_id"),
-    name: text("name").notNull(),
-    props: jsonb("props").$type<Record<string, string | number | boolean>>().notNull().default({}),
-    src: text("src"),
-    lang: text("lang"),
-    /** mobile | tablet | desktop */
-    device: text("device"),
-    hostOrigin: text("host_origin"),
-    createdAt: createdAt(),
-  },
-  (t) => [index("events_created_idx").on(t.createdAt)],
-);
+export interface EventDoc {
+  _id: ObjectId;
+  /** In-memory client session; null for server events. */
+  sessionId: string | null;
+  name: string;
+  props: Record<string, string | number | boolean>;
+  src: string | null;
+  lang: string | null;
+  /** mobile | tablet | desktop */
+  device: string | null;
+  hostOrigin: string | null;
+  createdAt: Date;
+}
 
 /** Daily counts per event and dimension (AN-02), refreshed by /api/cron/rollup. */
-export const eventsDaily = pgTable(
-  "events_daily",
-  {
-    /** Montréal calendar day. */
-    day: date("day", { mode: "string" }).notNull(),
-    name: text("name").notNull(),
-    /** One prop that splits the event: milestone m, reward, cta target, error reason. */
-    detail: text("detail").notNull().default(""),
-    src: text("src").notNull().default(""),
-    lang: text("lang").notNull().default(""),
-    device: text("device").notNull().default(""),
-    events: integer("events").notNull(),
-    sessions: integer("sessions").notNull(),
-  },
-  (t) => [primaryKey({ columns: [t.day, t.name, t.detail, t.src, t.lang, t.device] })],
-);
+export interface EventsDailyDoc {
+  _id: ObjectId;
+  /** Montréal calendar day, YYYY-MM-DD. */
+  day: string;
+  name: string;
+  /** One prop that splits the event: milestone m, reward, cta target, error reason. */
+  detail: string;
+  src: string;
+  lang: string;
+  device: string;
+  events: number;
+  sessions: number;
+}
 
 /** Every admin action, including CLI changes to campaign settings (SEC-09). */
-export const adminAudit = pgTable(
-  "admin_audit",
-  {
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    adminEmail: text("admin_email").notNull(),
-    action: text("action").notNull(),
-    target: text("target"),
-    details: jsonb("details").$type<Record<string, unknown>>().notNull().default({}),
-    createdAt: createdAt(),
+export interface AdminAuditDoc {
+  _id: ObjectId;
+  adminEmail: string;
+  action: string;
+  target: string | null;
+  details: Record<string, unknown>;
+  createdAt: Date;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Builders: a full document from the fields that matter, with the defaults filled in
+// ---------------------------------------------------------------------------------------------
+
+/** `Req` fields are required; the rest are optional overrides. `_id` is optional where generated. */
+type Init<T, Req extends keyof T> = Pick<T, Req> & Partial<Omit<T, Req>>;
+
+/** Defaults first, then the overrides that aren't `undefined`. */
+function fill<T extends object>(defaults: T, overrides: Partial<T>): T {
+  const out = { ...defaults } as Record<string, unknown>;
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out as T;
+}
+
+export function newPlayer(v: Init<PlayerDoc, "email" | "emailNormalized" | "language">): PlayerDoc {
+  const now = new Date();
+  return fill<PlayerDoc>(
+    {
+      _id: randomUUID(),
+      email: v.email,
+      emailNormalized: v.emailNormalized,
+      nickname: null,
+      hidden: false,
+      language: v.language,
+      ageConfirmedAt: null,
+      marketingOptIn: false,
+      firstSrc: null,
+      firstHost: null,
+      utm: {},
+      emailBlockedAt: null,
+      emailBlockReason: null,
+      crmStatus: "pending",
+      crmSyncedAt: null,
+      createdAt: now,
+      lastSeenAt: now,
+      deletedAt: null,
+    },
+    v,
+  );
+}
+
+export function newPlayerToken(v: Init<PlayerTokenDoc, "_id" | "playerId">): PlayerTokenDoc {
+  const now = new Date();
+  return fill<PlayerTokenDoc>(
+    { _id: v._id, playerId: v.playerId, createdAt: now, lastUsedAt: now },
+    v,
+  );
+}
+
+export function newConsent(
+  v: Init<
+    ConsentDoc,
+    "playerId" | "kind" | "granted" | "text" | "textVersion" | "language" | "source"
+  >,
+): ConsentDoc {
+  return fill<ConsentDoc>(
+    {
+      _id: new ObjectId(),
+      playerId: v.playerId,
+      kind: v.kind,
+      granted: v.granted,
+      text: v.text,
+      textVersion: v.textVersion,
+      language: v.language,
+      source: v.source,
+      ip: null,
+      userAgent: null,
+      hostOrigin: null,
+      createdAt: new Date(),
+    },
+    v,
+  );
+}
+
+export function newRun(
+  v: Init<
+    RunDoc,
+    | "_id"
+    | "seed"
+    | "rules"
+    | "tuningVersion"
+    | "issuedAt"
+    | "activeMs"
+    | "distanceM"
+    | "garlic"
+    | "hits"
+    | "status"
+  >,
+): RunDoc {
+  return fill<RunDoc>(
+    {
+      _id: v._id,
+      seed: v.seed,
+      playerId: null,
+      src: null,
+      hostOrigin: null,
+      utm: {},
+      language: null,
+      rules: v.rules,
+      tuningVersion: v.tuningVersion,
+      issuedAt: v.issuedAt,
+      finishedAt: new Date(),
+      activeMs: v.activeMs,
+      distanceM: v.distanceM,
+      garlic: v.garlic,
+      hits: v.hits,
+      status: v.status,
+      flagReason: null,
+      clientVersion: null,
+      claimedAt: null,
+    },
+    v,
+  );
+}
+
+export function newCampaignSettings(v: Partial<CampaignSettingsDoc> = {}): CampaignSettingsDoc {
+  return fill<CampaignSettingsDoc>(
+    {
+      _id: 1,
+      startsAt: null,
+      endsAt: null,
+      claimsEnabled: false,
+      alertEmails: [],
+      retentionDays: 90,
+      updatedAt: new Date(),
+      updatedBy: null,
+    },
+    v,
+  );
+}
+
+export function newReward(v: Init<RewardDoc, "_id" | "names" | "terms" | "rule">): RewardDoc {
+  return fill<RewardDoc>(
+    {
+      _id: v._id,
+      names: v.names,
+      terms: v.terms,
+      rule: v.rule,
+      active: true,
+      validityDays: null,
+      validUntil: null,
+      maxPerPlayer: 1,
+      alertThresholds: [20, 5],
+      alertLevel: null,
+      sortOrder: 0,
+      updatedAt: new Date(),
+    },
+    v,
+  );
+}
+
+export function newCode(v: Init<CodeDoc, "rewardId" | "code">): CodeDoc {
+  return fill<CodeDoc>(
+    {
+      _id: new ObjectId(),
+      rewardId: v.rewardId,
+      code: v.code,
+      batch: null,
+      expiresAt: null,
+      status: "available",
+      claimId: null,
+      assignedAt: null,
+      redeemedAt: null,
+      createdAt: new Date(),
+    },
+    v,
+  );
+}
+
+export function newClaim(
+  v: Init<ClaimDoc, "playerId" | "rewardId" | "runId" | "language">,
+): ClaimDoc {
+  return fill<ClaimDoc>(
+    {
+      _id: randomUUID(),
+      playerId: v.playerId,
+      rewardId: v.rewardId,
+      runId: v.runId,
+      codeId: null,
+      expiresAt: null,
+      emailStatus: "pending",
+      src: null,
+      utm: {},
+      language: v.language,
+      createdAt: new Date(),
+    },
+    v,
+  );
+}
+
+export function newEmailOutbox(
+  v: Init<EmailOutboxDoc, "playerId" | "kind" | "claimIds" | "language">,
+): EmailOutboxDoc {
+  const now = new Date();
+  return fill<EmailOutboxDoc>(
+    {
+      _id: randomUUID(),
+      playerId: v.playerId,
+      kind: v.kind,
+      claimIds: v.claimIds,
+      language: v.language,
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: now,
+      leaseUntil: null,
+      providerId: null,
+      lastError: null,
+      createdAt: now,
+      sentAt: null,
+    },
+    v,
+  );
+}
+
+export function newCrmOutbox(
+  v: Init<CrmOutboxDoc, "playerId" | "type" | "payload" | "idempotencyKey">,
+): CrmOutboxDoc {
+  const now = new Date();
+  return fill<CrmOutboxDoc>(
+    {
+      _id: new ObjectId(),
+      playerId: v.playerId,
+      type: v.type,
+      payload: v.payload,
+      idempotencyKey: v.idempotencyKey,
+      status: "pending",
+      attempts: 0,
+      nextAttemptAt: now,
+      lastError: null,
+      createdAt: now,
+      sentAt: null,
+    },
+    v,
+  );
+}
+
+export function newEvent(v: Init<EventDoc, "name">): EventDoc {
+  return fill<EventDoc>(
+    {
+      _id: new ObjectId(),
+      sessionId: null,
+      name: v.name,
+      props: {},
+      src: null,
+      lang: null,
+      device: null,
+      hostOrigin: null,
+      createdAt: new Date(),
+    },
+    v,
+  );
+}
+
+export function newAdminAudit(v: Init<AdminAuditDoc, "adminEmail" | "action">): AdminAuditDoc {
+  return fill<AdminAuditDoc>(
+    {
+      _id: new ObjectId(),
+      adminEmail: v.adminEmail,
+      action: v.action,
+      target: null,
+      details: {},
+      createdAt: new Date(),
+    },
+    v,
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Indexes and validators, applied by migration 0000 (./migrations.ts)
+// ---------------------------------------------------------------------------------------------
+
+export interface IndexSpec {
+  key: Record<string, 1 | -1>;
+  options: CreateIndexesOptions & { name: string };
+}
+
+export const INDEXES: Record<CollectionKey, IndexSpec[]> = {
+  players: [
+    {
+      key: { emailNormalized: 1 },
+      options: { name: "players_email_normalized_key", unique: true },
+    },
+    // Admin lists and the retention job walk players by age.
+    { key: { createdAt: 1 }, options: { name: "players_created_idx" } },
+    // The leaderboard asks for the hidden players on every rank; there are few of them.
+    {
+      key: { hidden: 1 },
+      options: { name: "players_hidden_idx", partialFilterExpression: { hidden: true } },
+    },
+  ],
+  playerTokens: [{ key: { playerId: 1 }, options: { name: "player_tokens_player_idx" } }],
+  consents: [{ key: { playerId: 1, createdAt: 1 }, options: { name: "consents_player_idx" } }],
+  runs: [
+    { key: { playerId: 1 }, options: { name: "runs_player_idx" } },
+    { key: { finishedAt: -1 }, options: { name: "runs_finished_idx" } },
+    {
+      key: { finishedAt: -1 },
+      options: {
+        name: "runs_flagged_idx",
+        partialFilterExpression: { status: "flagged" },
+      },
+    },
+  ],
+  bestRuns: [
+    {
+      // LB-01 order, with the player id so the order is total. `_id` is the player's id.
+      key: { garlic: -1, hits: 1, distanceM: -1, achievedAt: 1, _id: 1 },
+      options: { name: "best_runs_rank_idx" },
+    },
+  ],
+  campaignSettings: [],
+  rewards: [],
+  codes: [
+    { key: { code: 1 }, options: { name: "codes_code_key", unique: true } },
+    // The claim transaction takes the oldest available code: lowest _id first (RWD-03).
+    {
+      key: { rewardId: 1, _id: 1 },
+      options: { name: "codes_available_idx", partialFilterExpression: { status: "available" } },
+    },
+    // Stock counts by reward and status read this index alone.
+    {
+      key: { rewardId: 1, status: 1, expiresAt: 1 },
+      options: { name: "codes_stock_idx" },
+    },
+  ],
+  claims: [
+    // One claim per normalized email per reward (SEC-07, RWD-05).
+    {
+      key: { playerId: 1, rewardId: 1 },
+      options: { name: "claims_player_reward_key", unique: true },
+    },
+    // A code backs at most one claim. Claims not yet holding a code have a null codeId.
+    {
+      key: { codeId: 1 },
+      options: {
+        name: "claims_code_key",
+        unique: true,
+        partialFilterExpression: { codeId: { $type: "objectId" } },
+      },
+    },
+    { key: { runId: 1 }, options: { name: "claims_run_idx" } },
+    { key: { createdAt: 1 }, options: { name: "claims_created_idx" } },
+  ],
+  emailOutbox: [
+    { key: { status: 1, nextAttemptAt: 1 }, options: { name: "email_outbox_due_idx" } },
+    { key: { providerId: 1 }, options: { name: "email_outbox_provider_idx" } },
+    { key: { playerId: 1 }, options: { name: "email_outbox_player_idx" } },
+  ],
+  crmOutbox: [
+    {
+      key: { idempotencyKey: 1 },
+      options: { name: "crm_outbox_idempotency_key", unique: true },
+    },
+    {
+      key: { nextAttemptAt: 1 },
+      options: { name: "crm_outbox_due_idx", partialFilterExpression: { status: "pending" } },
+    },
+    { key: { playerId: 1 }, options: { name: "crm_outbox_player_idx" } },
+  ],
+  events: [{ key: { createdAt: 1 }, options: { name: "events_created_idx" } }],
+  eventsDaily: [
+    {
+      key: { day: 1, name: 1, detail: 1, src: 1, lang: 1, device: 1 },
+      options: { name: "events_daily_key", unique: true },
+    },
+  ],
+  adminAudit: [{ key: { createdAt: 1 }, options: { name: "admin_audit_created_idx" } }],
+};
+
+/**
+ * `$jsonSchema` validators standing in for the CHECK constraints: allowed values for the
+ * enumerations the app relies on, the settings singleton and the one-claim-per-reward rule.
+ */
+export const VALIDATORS: Partial<Record<CollectionKey, Document>> = {
+  consents: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["kind"],
+      properties: { kind: { enum: ["terms_age", "marketing"] } },
+    },
   },
-  (t) => [index("admin_audit_created_idx").on(t.createdAt)],
-);
+  runs: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["status"],
+      properties: { status: { enum: ["valid", "flagged"] } },
+    },
+  },
+  campaignSettings: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["_id", "retentionDays"],
+      properties: {
+        _id: { enum: [1] },
+        retentionDays: { bsonType: "number", minimum: 0 },
+      },
+    },
+  },
+  rewards: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["maxPerPlayer"],
+      properties: { maxPerPlayer: { enum: [1] } },
+    },
+  },
+  codes: {
+    $jsonSchema: {
+      bsonType: "object",
+      required: ["status"],
+      properties: { status: { enum: ["available", "assigned", "redeemed", "void"] } },
+    },
+  },
+};

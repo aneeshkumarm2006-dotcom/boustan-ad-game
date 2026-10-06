@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { GET } from "@/app/api/leaderboard/route";
-import { bestRuns, players, runs } from "@/db/schema";
+import { newPlayer, newRun } from "@/db/schema";
 import { TUNING } from "@/game-core";
 import { BOTH, connect, finish, resetDb, seedCampaign } from "@/tests/db";
+import { erasePlayer } from "./admin/players";
 import { claimRewards } from "./claims";
 import {
   cachedTop,
@@ -13,6 +13,7 @@ import {
   rankOfPlayer,
   rankPreview,
   topEntries,
+  updateBestRun,
 } from "./leaderboard";
 
 const { db, close } = connect();
@@ -40,37 +41,42 @@ async function addPlayer(s: Score) {
   const runId = randomUUID();
   const at = new Date(Date.now() - (s.ago ?? 0) * 60_000);
   const handle = s.name.replace(/\W/g, "");
-  await db.insert(players).values({
-    id,
-    email: `${handle}@example.com`,
-    emailNormalized: `${handle.toLowerCase()}@example.com`,
-    nickname: s.name,
-    language: "en",
-    hidden: s.hidden ?? false,
-    deletedAt: s.deleted ? new Date() : null,
-  });
-  await db.insert(runs).values({
-    id: runId,
-    seed: 1,
-    playerId: id,
-    rules: { distanceM: 100, garlic: 10 },
-    tuningVersion: TUNING.version,
-    issuedAt: at,
-    finishedAt: at,
-    activeMs: 1000,
-    distanceM: s.distanceM,
-    garlic: s.garlic,
-    hits: s.hits,
-    status: "valid",
-  });
-  await db.insert(bestRuns).values({
-    playerId: id,
+  await db.players.insertOne(
+    newPlayer({
+      _id: id,
+      email: `${handle}@example.com`,
+      emailNormalized: `${handle.toLowerCase()}@example.com`,
+      nickname: s.name,
+      language: "en",
+      hidden: s.hidden ?? false,
+    }),
+  );
+  await db.runs.insertOne(
+    newRun({
+      _id: runId,
+      seed: 1,
+      playerId: id,
+      rules: { distanceM: 100, garlic: 10 },
+      tuningVersion: TUNING.version,
+      issuedAt: at,
+      finishedAt: at,
+      activeMs: 1000,
+      distanceM: s.distanceM,
+      garlic: s.garlic,
+      hits: s.hits,
+      status: "valid",
+    }),
+  );
+  await db.bestRuns.insertOne({
+    _id: id,
     runId,
     garlic: s.garlic,
     hits: s.hits,
     distanceM: s.distanceM,
     achievedAt: at,
   });
+  // Erasing a player is what deletes them, and it removes their leaderboard row (DATA-07).
+  if (s.deleted) await erasePlayer(db, id);
   return id;
 }
 
@@ -150,6 +156,45 @@ describe("leaderboard order (LB-01)", () => {
   });
 });
 
+describe("a player's best run (LB-02)", () => {
+  const at = new Date();
+  const score = (garlic: number, hits: number, distanceM: number) => ({
+    garlic,
+    hits,
+    distanceM,
+    runId: randomUUID(),
+    at,
+  });
+  const stored = async (id: string) => (await db.bestRuns.findOne({ _id: id }))!;
+
+  it("is replaced only by a strictly better run: garlic, then fewer hits, then distance", async () => {
+    const id = randomUUID();
+    const first = score(5, 2, 100);
+    await updateBestRun(db, id, first);
+    expect(await stored(id)).toMatchObject({ runId: first.runId, garlic: 5, hits: 2 });
+
+    // Not better: fewer garlic, more hits, same, or less far.
+    for (const worse of [score(4, 0, 999), score(5, 3, 999), score(5, 2, 100), score(5, 2, 99)]) {
+      await updateBestRun(db, id, worse);
+      expect((await stored(id)).runId).toBe(first.runId);
+    }
+    // Better: farther, fewer hits, more garlic.
+    for (const better of [score(5, 2, 101), score(5, 1, 1), score(6, 9, 1)]) {
+      await updateBestRun(db, id, better);
+      expect((await stored(id)).runId).toBe(better.runId);
+    }
+    expect(await db.bestRuns.countDocuments({ _id: id })).toBe(1);
+  });
+
+  it("keeps the best of runs that finish at the same moment", async () => {
+    const id = randomUUID();
+    const runs = Array.from({ length: 30 }, (_, i) => score(i % 10, 0, 100));
+    await Promise.all(runs.map((r) => updateBestRun(db, id, r)));
+    expect(await stored(id)).toMatchObject({ garlic: 9 });
+    expect(await db.bestRuns.countDocuments({ _id: id })).toBe(1);
+  });
+});
+
 describe("only validated runs from players with an email (LB-03)", () => {
   it("adds a player after a claim, not after an anonymous finish", async () => {
     const anon = await finish(db, BOTH(1));
@@ -168,7 +213,7 @@ describe("only validated runs from players with an email (LB-03)", () => {
     const again = await finish(db, BOTH(2), claim.response.playerToken);
     expect(again.rank).toBe(1);
     expect(again.best).not.toBeNull();
-    const rows = await db.select().from(bestRuns).where(eq(bestRuns.playerId, claim.playerId));
+    const rows = await db.bestRuns.find({ _id: claim.playerId }).toArray();
     expect(rows).toHaveLength(1);
   });
 });

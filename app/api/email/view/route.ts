@@ -1,5 +1,3 @@
-import { eq } from "drizzle-orm";
-import { emailOutbox } from "@/db/schema";
 import { createTranslator, isLang } from "@/i18n";
 import { db } from "@/lib/server/db";
 import { loadCouponLines } from "@/lib/server/email/deliver";
@@ -29,13 +27,13 @@ export const GET = withErrors("email_view", async (request: Request) => {
   if (!payload) return invalid();
 
   const q = db();
-  const [email] = await q.select().from(emailOutbox).where(eq(emailOutbox.id, payload.e));
+  const email = await q.emailOutbox.findOne({ _id: payload.e });
   if (!email) return invalid();
   const { lines, src } = await loadCouponLines(q, email);
   if (lines.length === 0) return invalid();
 
   const rendered = await renderCouponEmail({
-    emailId: email.id,
+    emailId: email._id,
     playerId: email.playerId,
     lang,
     resend: email.kind !== "coupon",

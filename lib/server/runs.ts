@@ -4,8 +4,8 @@
  * can't be spent twice; then it validates the numbers against the seed (game-core).
  */
 import { randomInt, randomUUID } from "node:crypto";
-import type { Db } from "@/db/client";
-import { runs } from "@/db/schema";
+import { insertOnce, isDuplicateKey, type Db } from "@/db/client";
+import { newRun } from "@/db/schema";
 import { TUNING, unlockedRewards, validateRun, type RunFlag } from "@/game-core";
 import type { Lang } from "@/i18n";
 import type { FinishRunResponse, StartRunResponse } from "@/lib/api/types";
@@ -90,32 +90,40 @@ export async function finishRun(
   );
   const player = await findPlayerByToken(q, ctx.playerToken);
 
-  const inserted = await q
-    .insert(runs)
-    .values({
-      id: runId,
-      seed: token.seed,
-      playerId: player?.id ?? null,
-      src: token.src,
-      hostOrigin: token.host,
-      utm: token.utm,
-      language: token.lang,
-      rules: token.rules,
-      tuningVersion: token.tv,
-      issuedAt: new Date(token.iat),
-      finishedAt: now,
-      // Clamp what we store; a forged run can send anything that passed the schema.
-      activeMs: Math.min(input.activeMs, 2_147_483_647),
-      distanceM: input.distance,
-      garlic: input.garlic,
-      hits: input.hits,
-      status: verdict.ok ? "valid" : "flagged",
-      flagReason: verdict.ok ? null : verdict.reason,
-      clientVersion: ctx.clientVersion,
-    })
-    .onConflictDoNothing({ target: runs.id })
-    .returning({ id: runs.id });
-  if (inserted.length === 0) return reject(runId, "reused");
+  // The run id is the document's _id, so a token can only be spent once. Two finishes at the
+  // same moment may also surface as a duplicate key, which means the same thing.
+  let inserted: boolean;
+  try {
+    inserted = await insertOnce(
+      q.runs,
+      { _id: runId },
+      newRun({
+        _id: runId,
+        seed: token.seed,
+        playerId: player?._id ?? null,
+        src: token.src,
+        hostOrigin: token.host,
+        utm: token.utm,
+        language: token.lang,
+        rules: token.rules,
+        tuningVersion: token.tv,
+        issuedAt: new Date(token.iat),
+        finishedAt: now,
+        // Clamp what we store; a forged run can send anything that passed the schema.
+        activeMs: Math.min(input.activeMs, 2_147_483_647),
+        distanceM: input.distance,
+        garlic: input.garlic,
+        hits: input.hits,
+        status: verdict.ok ? "valid" : "flagged",
+        flagReason: verdict.ok ? null : verdict.reason,
+        clientVersion: ctx.clientVersion,
+      }),
+    );
+  } catch (error) {
+    if (!isDuplicateKey(error)) throw error;
+    inserted = false;
+  }
+  if (!inserted) return reject(runId, "reused");
   if (!verdict.ok) return reject(runId, verdict.reason);
 
   const campaign = await cachedCampaign();
@@ -126,12 +134,12 @@ export async function finishRun(
   let best = null;
   let rank: number | null = null;
   if (player) {
-    await updateBestRun(q, player.id, { ...score, runId, at: now });
-    best = await bestOf(q, player.id);
-    rank = await rankOfPlayer(q, player.id);
+    await updateBestRun(q, player._id, { ...score, runId, at: now });
+    best = await bestOf(q, player._id);
+    rank = await rankOfPlayer(q, player._id);
     void touchPlayerToken(q, ctx.playerToken!).catch(() => {});
   }
-  const preview = await rankPreview(q, score, player?.id ?? null);
+  const preview = await rankPreview(q, score, player?._id ?? null);
   const claimToken = signToken("claim", {
     v: 1,
     run: runId,

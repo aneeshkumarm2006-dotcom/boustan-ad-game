@@ -1,12 +1,12 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import postgres from "postgres";
+import { createDb } from "../db/client";
 import { cheat, setHeat, snapshot, stcReady } from "../e2e/helpers";
-import { LIVE_DATABASE_URL } from "../playwright.live.config";
+import { LIVE_MONGODB_URI } from "../playwright.live.config";
 
-const sql = postgres(LIVE_DATABASE_URL, { max: 2, onnotice: () => {} });
-test.afterAll(() => sql.end());
+const { db, client } = createDb(LIVE_MONGODB_URI, { max: 2 });
+test.afterAll(() => client.close());
 
 const INVALID = {
   valid: false,
@@ -75,35 +75,35 @@ test("a real run unlocks both rewards; the claim issues two pool codes and one e
   expect(shown[1]).toMatch(/^E2E-GARL-\d{3}$/);
   await expect(page.getByText("Aussi envoyé à E•••@example.com")).toBeVisible();
 
-  const [player] = await sql`select id, email, email_normalized, marketing_opt_in, first_src
-    from players where email = ${email}`;
+  const player = (await db.players.findOne({ email }))!;
   expect(player).toMatchObject({
-    email_normalized: `e2e.player@example.com`,
-    marketing_opt_in: true,
-    first_src: "e2e-live",
+    emailNormalized: `e2e.player@example.com`,
+    marketingOptIn: true,
+    firstSrc: "e2e-live",
   });
-  const issued = await sql`select c.code, c.status from codes c
-    join claims cl on cl.code_id = c.id where cl.player_id = ${player.id} order by c.code`;
+  const claims = await db.claims.find({ playerId: player._id }).toArray();
+  const issued = await db.codes
+    .find({ _id: { $in: claims.map((c) => c.codeId!) } })
+    .sort({ code: 1 })
+    .toArray();
   expect(issued.map((r) => [r.code, r.status])).toEqual([
     [shown[0], "assigned"],
     [shown[1], "assigned"],
   ]);
-  const consents = await sql`select kind, granted, text_version, ip is not null as has_ip
-    from consents where player_id = ${player.id} order by id`;
-  expect(consents.map((c) => [c.kind, c.granted, c.has_ip])).toEqual([
+  const consents = await db.consents.find({ playerId: player._id }).sort({ _id: 1 }).toArray();
+  expect(consents.map((c) => [c.kind, c.granted, c.ip !== null])).toEqual([
     ["terms_age", true, true],
     ["marketing", true, true],
   ]);
-  const [run] =
-    await sql`select status, src, client_version from runs where player_id = ${player.id}`;
-  expect(run).toMatchObject({ status: "valid", src: "e2e-live", client_version: "dev" });
+  const run = await db.runs.findOne({ playerId: player._id });
+  expect(run).toMatchObject({ status: "valid", src: "e2e-live", clientVersion: "dev" });
 
   // One email with both codes, sent after the response (MAIL-02, MAIL-05).
   await expect.poll(() => emailWith(shown[0], started) !== null, { timeout: 30_000 }).toBe(true);
   const text = emailWith(shown[0], started)!;
   expect(text).toContain(shown[1]);
   expect(text).toContain("Subject: Votre Coke et votre sauce à l'ail gratuits vous attendent");
-  const [outbox] = await sql`select status, kind from email_outbox where player_id = ${player.id}`;
+  const outbox = await db.emailOutbox.findOne({ playerId: player._id, kind: "coupon" });
   expect(outbox).toMatchObject({ status: "sent", kind: "coupon" });
 
   // The other-language link shows the same codes in English (MAIL-03).
@@ -116,12 +116,8 @@ test("a real run unlocks both rewards; the claim issues two pool codes and one e
   await page.getByRole("button", { name: "RENVOYER LE COURRIEL" }).click();
   await expect(page.getByRole("button", { name: "COURRIEL ENVOYÉ" })).toBeVisible();
   await expect
-    .poll(
-      async () =>
-        (
-          await sql`select count(*)::int as n from email_outbox
-      where player_id = ${player.id} and kind = 'resend' and status = 'sent'`
-        )[0].n,
+    .poll(() =>
+      db.emailOutbox.countDocuments({ playerId: player._id, kind: "resend", status: "sent" }),
     )
     .toBe(1);
 
@@ -130,11 +126,14 @@ test("a real run unlocks both rewards; the claim issues two pool codes and one e
   const res = await page.request.get(unsub);
   expect(res.status()).toBe(200);
   expect(await res.text()).toContain("Désabonnement confirmé");
-  const [after] = await sql`select marketing_opt_in from players where id = ${player.id}`;
-  expect(after.marketing_opt_in).toBe(false);
-  const [withdrawn] = await sql`select source from consents
-    where player_id = ${player.id} and kind = 'marketing' and granted = false`;
-  expect(withdrawn.source).toBe("unsubscribe");
+  const after = await db.players.findOne({ _id: player._id });
+  expect(after!.marketingOptIn).toBe(false);
+  const withdrawn = await db.consents.findOne({
+    playerId: player._id,
+    kind: "marketing",
+    granted: false,
+  });
+  expect(withdrawn!.source).toBe("unsubscribe");
 });
 
 test("forged finish requests get no reward and are flagged (AC-05)", async ({ request }) => {
@@ -149,8 +148,8 @@ test("forged finish requests get no reward and are flagged (AC-05)", async ({ re
     data: { token: run.token, distance: 128.1, garlic: 12, hits: 0, activeMs: 25_000 },
   });
   expect(await forged.json()).toEqual(INVALID);
-  const [row] = await sql`select status, flag_reason from runs where id = ${run.runId}`;
-  expect(row).toMatchObject({ status: "flagged", flag_reason: "too_fast" });
+  const row = await db.runs.findOne({ _id: run.runId });
+  expect(row).toMatchObject({ status: "flagged", flagReason: "too_fast" });
 
   // The same token again, and a token with its payload edited.
   const reused = await request.post(`/api/runs/${run.runId}/finish`, {

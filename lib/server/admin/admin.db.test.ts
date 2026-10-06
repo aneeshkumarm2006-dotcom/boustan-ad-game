@@ -1,19 +1,15 @@
-import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  adminAudit,
-  bestRuns,
-  campaignSettings,
-  codes,
-  consents,
-  emailOutbox,
-  playerTokens,
-  players,
-  rewards,
-  runs,
-} from "@/db/schema";
 import { parseCsv } from "@/lib/csv";
-import { BOTH, NOTHING, addCodes, connect, finish, resetDb, seedCampaign } from "@/tests/db";
+import {
+  BOTH,
+  NOTHING,
+  addCodes,
+  connect,
+  finish,
+  resetDb,
+  seedCampaign,
+  takeCodes,
+} from "@/tests/db";
 import { clearBoardCache, rankOfPlayer, topEntries } from "../leaderboard";
 import { claimRewards } from "../claims";
 import { audit } from "./audit";
@@ -83,7 +79,7 @@ describe("code pool import (RWD-02)", () => {
       inOtherPool: 0,
     });
     expect(res.summary.invalid).toEqual([{ line: 6, value: "x", reason: "format" }]);
-    const rows = await db.select().from(codes).where(eq(codes.rewardId, "free_coke"));
+    const rows = await db.codes.find({ rewardId: "free_coke" }).toArray();
     expect(rows).toHaveLength(12);
     expect(rows.find((r) => r.code === "NEW-2")?.batch).toBe("b1");
   });
@@ -91,7 +87,7 @@ describe("code pool import (RWD-02)", () => {
   it("flags a code that already sits in the other reward's pool, and leaves it there", async () => {
     const res = await importCodes(db, "free_coke", "C-GARL-0000\nFRESH-1\n");
     expect(res.ok && res.summary).toMatchObject({ imported: 1, alreadyExist: 1, inOtherPool: 1 });
-    const [row] = await db.select().from(codes).where(eq(codes.code, "C-GARL-0000"));
+    const row = (await db.codes.findOne({ code: "C-GARL-0000" }))!;
     expect(row.rewardId).toBe("free_garlic_sauce");
   });
 
@@ -100,7 +96,7 @@ describe("code pool import (RWD-02)", () => {
       now: new Date("2026-10-15T14:30:00Z"),
     });
     expect(res.ok && res.summary.batch).toBe("import-202610151430");
-    const [row] = await db.select().from(codes).where(eq(codes.code, "ONLY-1"));
+    const row = (await db.codes.findOne({ code: "ONLY-1" }))!;
     expect(row.batch).toBe("import-202610151430");
     expect(await importCodes(db, "free_pizza", "A-1\n")).toEqual({
       ok: false,
@@ -109,10 +105,29 @@ describe("code pool import (RWD-02)", () => {
     expect(await importCodes(db, "free_coke", "code\n")).toEqual({ ok: false, error: "empty" });
   });
 
+  it("keeps a code's own expiry date from the file", async () => {
+    await importCodes(db, "free_coke", "code,expires_at\nDATED-1,2026-11-15\n");
+    const row = (await db.codes.findOne({ code: "DATED-1" }))!;
+    // The end of the 15th, Montréal time.
+    expect(row.expiresAt?.toISOString()).toBe("2026-11-16T04:59:00.000Z");
+  });
+
   it("imports a large file in chunks", async () => {
     const lines = Array.from({ length: 5000 }, (_, i) => `BULK-${String(i).padStart(5, "0")}`);
     const res = await importCodes(db, "free_garlic_sauce", lines.join("\n"));
     expect(res.ok && res.summary.imported).toBe(5000);
+  });
+
+  it("issues imported codes in the order the file lists them", async () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `ORDER-${String(i).padStart(3, "0")}`);
+    await db.codes.deleteMany({});
+    await importCodes(db, "free_coke", lines.join("\n"));
+    const oldest = await db.codes
+      .find({ rewardId: "free_coke", status: "available" })
+      .sort({ _id: 1 })
+      .limit(3)
+      .toArray();
+    expect(oldest.map((c) => c.code)).toEqual(["ORDER-000", "ORDER-001", "ORDER-002"]);
   });
 
   it("two imports of the same file at once add each code once", async () => {
@@ -124,10 +139,7 @@ describe("code pool import (RWD-02)", () => {
     expect(a.ok && b.ok).toBe(true);
     const imported = (a.ok ? a.summary.imported : 0) + (b.ok ? b.summary.imported : 0);
     expect(imported).toBe(300);
-    const rows = await db
-      .select()
-      .from(codes)
-      .where(sql`${codes.code} like 'RACE-%'`);
+    const rows = await db.codes.find({ code: { $regex: "^RACE-" } }).toArray();
     expect(rows).toHaveLength(300);
   });
 
@@ -137,19 +149,32 @@ describe("code pool import (RWD-02)", () => {
     const coke = before.find((p) => p.reward === "free_coke")!;
     expect(coke).toMatchObject({ total: 10, available: 9, assigned: 1, redeemed: 0 });
     expect(coke.redemptionRate).toBe(0);
-    const [assigned] = await db.select().from(codes).where(eq(codes.status, "assigned"));
+    const assigned = (await db.codes.findOne({ status: "assigned" }))!;
     const res = await markRedeemed(db, `code,redeemed_at\n${assigned.code},2026-10-16T12:00\n`);
     expect(res.ok && res.summary.marked).toBe(1);
     const after = (await poolStats(db)).find((p) => p.reward === assigned.rewardId)!;
     expect(after.redeemed).toBe(1);
     expect(after.redemptionRate).toBe(1);
   });
+
+  it("counts codes past their own expiry apart from the ones that can still be issued", async () => {
+    await db.codes.updateMany(
+      { rewardId: "free_coke", code: { $in: ["C-COKE-0000", "C-COKE-0001"] } },
+      { $set: { expiresAt: new Date(Date.now() - 86_400_000) } },
+    );
+    await db.codes.updateOne(
+      { code: "C-COKE-0002" },
+      { $set: { expiresAt: new Date(Date.now() + 86_400_000) } },
+    );
+    const coke = (await poolStats(db)).find((p) => p.reward === "free_coke")!;
+    expect(coke).toMatchObject({ total: 10, available: 8, expiredAvailable: 2 });
+  });
 });
 
 describe("uEat redeemed report (ADM-08)", () => {
   it("marks issued codes, and counts repeats, unissued and unknown codes", async () => {
     await claimPlayer("a@example.com");
-    const issued = await db.select().from(codes).where(eq(codes.status, "assigned"));
+    const issued = await db.codes.find({ status: "assigned" }).sort({ _id: 1 }).toArray();
     expect(issued).toHaveLength(2);
     const csv = [
       "code",
@@ -182,15 +207,11 @@ describe("low-stock emails (RWD-04)", () => {
   };
   beforeEach(async () => {
     sent.length = 0;
-    await db.update(campaignSettings).set({ alertEmails: ["ops@example.com", "boss@example.com"] });
+    await db.campaignSettings.updateOne(
+      {},
+      { $set: { alertEmails: ["ops@example.com", "boss@example.com"] } },
+    );
   });
-  const take = (reward: "free_coke" | "free_garlic_sauce", n: number) =>
-    db
-      .update(codes)
-      .set({ status: "assigned" })
-      .where(
-        sql`${codes.id} in (select id from codes where reward_id = ${reward} and status = 'available' order by id limit ${n})`,
-      );
 
   it("sends nothing while stock is healthy", async () => {
     await runStockAlerts(db, send);
@@ -198,7 +219,7 @@ describe("low-stock emails (RWD-04)", () => {
   });
 
   it("announces each threshold once, to every recipient", async () => {
-    await take("free_coke", 8); // 2 of 10 left: 20%
+    await takeCodes(db, "free_coke", 8); // 2 of 10 left: 20%
     const first = await runStockAlerts(db, send);
     expect(first.find((r) => r.reward === "free_coke")?.announced).toBe(20);
     expect(sent.map((e) => e.to).sort()).toEqual(["boss@example.com", "ops@example.com"]);
@@ -208,40 +229,37 @@ describe("low-stock emails (RWD-04)", () => {
     await runStockAlerts(db, send);
     expect(sent).toHaveLength(2); // same level, no repeat
 
-    await take("free_coke", 1); // 1 of 10 left: 10%, still the 20 level
+    await takeCodes(db, "free_coke", 1); // 1 of 10 left: 10%, still the 20 level
     await runStockAlerts(db, send);
     expect(sent).toHaveLength(2);
 
-    await take("free_coke", 1); // none left: 5% level
+    await takeCodes(db, "free_coke", 1); // none left: 5% level
     const last = await runStockAlerts(db, send);
     expect(last.find((r) => r.reward === "free_coke")?.announced).toBe(5);
     expect(sent).toHaveLength(4);
   });
 
   it("re-arms after codes are added", async () => {
-    await take("free_coke", 9);
+    await takeCodes(db, "free_coke", 9);
     await runStockAlerts(db, send);
     expect(sent).toHaveLength(2);
     await addCodes(db, "free_coke", 100, "MORE");
     await runStockAlerts(db, send);
-    const [coke] = await db.select().from(rewards).where(eq(rewards.id, "free_coke"));
+    const coke = (await db.rewards.findOne({ _id: "free_coke" }))!;
     expect(coke.alertLevel).toBeNull();
-    await db
-      .update(codes)
-      .set({ status: "void" })
-      .where(sql`${codes.code} like 'MORE-%'`);
+    await db.codes.updateMany({ code: { $regex: "^MORE-" } }, { $set: { status: "void" } });
     await runStockAlerts(db, send);
     expect(sent.length).toBeGreaterThan(2);
   });
 
   it("uses the thresholds an admin sets, and falls back to ADMIN_EMAILS when no recipients are set", async () => {
     await setPoolAlerts(db, "free_garlic_sauce", [60]);
-    await db.update(campaignSettings).set({ alertEmails: [] });
+    await db.campaignSettings.updateOne({}, { $set: { alertEmails: [] } });
     process.env.ADMIN_EMAILS = "owner@example.com";
     const { resetEnvForTests } = await import("../env");
     resetEnvForTests();
     try {
-      await take("free_garlic_sauce", 5); // 50% left
+      await takeCodes(db, "free_garlic_sauce", 5); // 50% left
       await runStockAlerts(db, send);
       expect(sent.map((e) => e.to)).toEqual(["owner@example.com"]);
     } finally {
@@ -251,13 +269,13 @@ describe("low-stock emails (RWD-04)", () => {
   });
 
   it("keeps trying when the email fails", async () => {
-    await take("free_coke", 9);
+    await takeCodes(db, "free_coke", 9);
     const failing = async () => {
       throw new Error("provider down");
     };
     const res = await runStockAlerts(db, failing);
     expect(res.find((r) => r.reward === "free_coke")?.announced).toBeNull();
-    const [coke] = await db.select().from(rewards).where(eq(rewards.id, "free_coke"));
+    const coke = (await db.rewards.findOne({ _id: "free_coke" }))!;
     expect(coke.alertLevel).toBeNull();
     await runStockAlerts(db, send);
     expect(sent.length).toBeGreaterThan(0);
@@ -272,6 +290,7 @@ describe("players (ADM-04)", () => {
     expect((await searchPlayers(db, "OMAR")).map((p) => p.email)).toEqual(["omar@example.com"]);
     expect((await searchPlayers(db, "100")).map((p) => p.nickname)).toEqual(["Omar 100"]);
     expect(await searchPlayers(db, "%")).toHaveLength(0); // % is not a wildcard
+    expect(await searchPlayers(db, ".*")).toHaveLength(0); // nor is a regex
     expect(await searchPlayers(db, "")).toHaveLength(2);
     expect((await searchPlayers(db, "omar"))[0].claimCount).toBe(2);
   });
@@ -281,7 +300,7 @@ describe("players (ADM-04)", () => {
     const detail = await playerDetail(db, playerId);
     expect(detail?.runs).toHaveLength(1);
     expect(detail?.claims.map((c) => c.reward).sort()).toEqual(["free_coke", "free_garlic_sauce"]);
-    expect(detail?.claims.every((c) => c.code)).toBe(true);
+    expect(detail?.claims.every((c) => c.code && c.codeStatus === "assigned")).toBe(true);
     expect(detail?.consents.map((c) => c.kind).sort()).toEqual(["marketing", "terms_age"]);
     expect(detail?.emails).toHaveLength(1);
     expect(detail?.devices).toBe(1);
@@ -292,20 +311,27 @@ describe("players (ADM-04)", () => {
     const { playerId } = await claimPlayer("again@example.com");
     const id = await queueCouponResend(db, playerId);
     expect(id).not.toBeNull();
-    const [row] = await db.select().from(emailOutbox).where(eq(emailOutbox.id, id!));
+    const row = (await db.emailOutbox.findOne({ _id: id! }))!;
     expect(row).toMatchObject({ kind: "resend", playerId });
     expect(row.claimIds).toHaveLength(2);
-    await db.update(players).set({ emailBlockedAt: new Date() }).where(eq(players.id, playerId));
+    await db.players.updateOne({ _id: playerId }, { $set: { emailBlockedAt: new Date() } });
     expect(await queueCouponResend(db, playerId)).toBeNull();
   });
 
   it("exports everything held about a player", async () => {
     const { playerId } = await claimPlayer("export@example.com", { nickname: "Exporter" });
     const data = await exportPlayer(db, playerId);
-    expect(data?.player).toMatchObject({ email: "export@example.com", nickname: "Exporter" });
+    expect(data?.player).toMatchObject({
+      id: playerId,
+      email: "export@example.com",
+      nickname: "Exporter",
+    });
     expect(data?.claims).toHaveLength(2);
     expect(data?.consents.length).toBeGreaterThan(0);
+    expect(data?.bestRun).toMatchObject({ playerId });
+    expect(data?.runs).toHaveLength(1);
     expect(JSON.stringify(data)).not.toContain("tokenHash");
+    expect(JSON.stringify(data)).not.toContain('"_id"');
   });
 });
 
@@ -318,25 +344,21 @@ describe("erasing a player (DATA-07)", () => {
     const res = await erasePlayer(db, playerId);
     expect(res).toMatchObject({ consentRows: 2, devices: 1 });
 
-    const [p] = await db.select().from(players).where(eq(players.id, playerId));
+    const p = (await db.players.findOne({ _id: playerId }))!;
     expect(p.email).toContain("@erased.invalid");
     expect(p.email).not.toContain("gone@");
     expect(p).toMatchObject({ nickname: null, marketingOptIn: false });
     expect(p.deletedAt).not.toBeNull();
-    expect(await db.select().from(consents).where(eq(consents.playerId, playerId))).toEqual([]);
-    expect(await db.select().from(playerTokens).where(eq(playerTokens.playerId, playerId))).toEqual(
-      [],
-    );
-    expect(await db.select().from(bestRuns).where(eq(bestRuns.playerId, playerId))).toEqual([]);
+    expect(await db.consents.find({ playerId }).toArray()).toEqual([]);
+    expect(await db.playerTokens.find({ playerId }).toArray()).toEqual([]);
+    expect(await db.bestRuns.find({ _id: playerId }).toArray()).toEqual([]);
     expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Stayer"]);
     // Anonymous totals: runs and issued codes are still counted.
-    expect(await db.select().from(runs).where(eq(runs.playerId, playerId))).toHaveLength(1);
+    expect(await db.runs.find({ playerId }).toArray()).toHaveLength(1);
     const stock = await poolStats(db);
     expect(stock.find((s) => s.reward === "free_coke")?.assigned).toBe(2);
     // The other player is untouched.
-    expect(
-      (await db.select().from(consents).where(eq(consents.playerId, other.playerId))).length,
-    ).toBe(1);
+    expect(await db.consents.countDocuments({ playerId: other.playerId })).toBe(1);
     // Erasing twice does nothing.
     expect(await erasePlayer(db, playerId)).toBeNull();
     // The address can be used again by a new player.
@@ -347,13 +369,19 @@ describe("erasing a player (DATA-07)", () => {
   it("stops queued emails", async () => {
     const { playerId } = await claimPlayer("queued@example.com");
     await erasePlayer(db, playerId);
-    const rows = await db.select().from(emailOutbox).where(eq(emailOutbox.playerId, playerId));
+    const rows = await db.emailOutbox.find({ playerId }).toArray();
     expect(rows.every((r) => r.status === "blocked")).toBe(true);
   });
 
-  it("the consent log still refuses deletes outside a purge", async () => {
-    const { playerId } = await claimPlayer("log@example.com");
-    await expect(db.delete(consents).where(eq(consents.playerId, playerId))).rejects.toThrow();
+  it("skips queued CRM events", async () => {
+    const { playerId } = await claimPlayer("crm@example.com");
+    expect(
+      (await db.crmOutbox.find({ playerId }).toArray()).every((r) => r.status === "pending"),
+    ).toBe(true);
+    await erasePlayer(db, playerId);
+    const rows = await db.crmOutbox.find({ playerId }).toArray();
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.status === "skipped")).toBe(true);
   });
 });
 
@@ -384,6 +412,11 @@ describe("moderation (LB-07)", () => {
     const { playerId } = await claimPlayer("blank@example.com", { nickname: "Old" });
     const name = await renamePlayer(db, playerId, "  ");
     expect(name).toMatch(/^\S+ \S+ \d+$/);
+  });
+
+  it("can't hide or rename a player who isn't there", async () => {
+    expect(await setHidden(db, "00000000-0000-4000-8000-000000000000", true)).toBe(false);
+    expect(await renamePlayer(db, "00000000-0000-4000-8000-000000000000", "Nobody")).toBeNull();
   });
 });
 
@@ -438,14 +471,14 @@ describe("campaign settings (ADM-07)", () => {
     expect(after.endsAt?.toISOString()).toBe("2026-11-16T04:59:00.000Z");
     expect(after.rewards.free_garlic_sauce.threshold).toBe(10);
 
-    const log = await db.select().from(adminAudit);
+    const log = await db.adminAudit.find().toArray();
     expect(log).toHaveLength(6);
     expect(log.every((r) => r.adminEmail === "admin@example.com")).toBe(true);
     const threshold = log.find((r) => r.action === "reward.threshold");
     expect(threshold?.details).toMatchObject({ field: "free_coke.threshold", from: 100, to: 150 });
 
     expect(await saveSettings(db, "admin@example.com", next.value)).toEqual([]);
-    expect(await db.select().from(adminAudit)).toHaveLength(6);
+    expect(await db.adminAudit.find().toArray()).toHaveLength(6);
   });
 
   it("applies new thresholds to new run tokens only", async () => {
@@ -468,7 +501,7 @@ describe("campaign settings (ADM-07)", () => {
 
   it("writes audit rows for admin actions", async () => {
     await audit(db, "admin@example.com", "codes.import", "free_coke", { imported: 3 });
-    const [row] = await db.select().from(adminAudit);
+    const row = (await db.adminAudit.findOne())!;
     expect(row).toMatchObject({ action: "codes.import", target: "free_coke" });
   });
 });
@@ -535,6 +568,18 @@ describe("claimers export (ADM-06, CRM-02)", () => {
     expect(col(only[1], "email")).toBe("optin@example.com");
   });
 
+  it("lists claimers oldest first", async () => {
+    await claimPlayer("first@example.com");
+    await claimPlayer("second@example.com");
+    await claimPlayer("third@example.com");
+    const csv = parseCsv(await claimersCsv(db, false));
+    expect(csv.slice(1).map((r) => r[csv[0].indexOf("email")])).toEqual([
+      "first@example.com",
+      "second@example.com",
+      "third@example.com",
+    ]);
+  });
+
   it("shows a withdrawal as the current marketing status", async () => {
     const { playerId } = await claimPlayer("leaver@example.com", { optIn: true });
     const { unsubscribe } = await import("../unsubscribe");
@@ -557,10 +602,10 @@ describe("claimers export (ADM-06, CRM-02)", () => {
   it("defuses spreadsheet formulas in nicknames", async () => {
     // A nickname can't start with = (format rules), but a placement can carry odd text.
     await claimPlayer("formula@example.com");
-    await db
-      .update(players)
-      .set({ nickname: "=SUM(A1)", firstSrc: "@cmd" })
-      .where(eq(players.emailNormalized, "formula@example.com"));
+    await db.players.updateOne(
+      { emailNormalized: "formula@example.com" },
+      { $set: { nickname: "=SUM(A1)", firstSrc: "@cmd" } },
+    );
     const csv = await claimersCsv(db, false);
     expect(csv).toContain("'=SUM(A1)");
     expect(csv).toContain("'@cmd");
@@ -570,9 +615,12 @@ describe("claimers export (ADM-06, CRM-02)", () => {
 describe("data retention (DATA-06)", () => {
   const DAY = 86_400_000;
   const endCampaign = (daysAgo: number, retentionDays = 90) =>
-    db
-      .update(campaignSettings)
-      .set({ endsAt: new Date(Date.now() - daysAgo * DAY), retentionDays });
+    db.campaignSettings.updateOne(
+      {},
+      { $set: { endsAt: new Date(Date.now() - daysAgo * DAY), retentionDays } },
+    );
+  const expireClaims = (daysAgo: number) =>
+    db.claims.updateMany({}, { $set: { expiresAt: new Date(Date.now() - daysAgo * DAY) } });
 
   it("does nothing before the purge date or without an end date", async () => {
     await claimPlayer("early@example.com");
@@ -587,17 +635,17 @@ describe("data retention (DATA-06)", () => {
     const inn = await claimPlayer("in@example.com", { optIn: true });
     await endCampaign(120);
     // Their codes expired along with the campaign.
-    await db.execute(sql`update claims set expires_at = now() - interval '30 days'`);
+    await expireClaims(30);
     expect(await retentionDue(db)).toBe(1);
     const res = await runRetention(db);
     expect(res).toEqual({ due: true, anonymized: 1, remaining: 0 });
-    const [gone] = await db.select().from(players).where(eq(players.id, out.playerId));
+    const gone = (await db.players.findOne({ _id: out.playerId }))!;
     expect(gone.deletedAt).not.toBeNull();
     expect(gone.email).toContain("@erased.invalid");
-    const [kept] = await db.select().from(players).where(eq(players.id, inn.playerId));
+    const kept = (await db.players.findOne({ _id: inn.playerId }))!;
     expect(kept.deletedAt).toBeNull();
     expect(kept.email).toBe("in@example.com");
-    const log = await db.select().from(adminAudit);
+    const log = await db.adminAudit.find().toArray();
     expect(log.map((r) => r.action)).toContain("retention.purge");
     expect(log[0].adminEmail).toBe("system:retention");
     expect(await runRetention(db)).toMatchObject({ anonymized: 0 });
@@ -610,16 +658,16 @@ describe("data retention (DATA-06)", () => {
     await endCampaign(200, 180);
     // Still holds codes that haven't expired.
     expect(await runRetention(db)).toMatchObject({ due: true, anonymized: 0 });
-    await db.execute(sql`update claims set expires_at = now() - interval '1 day'`);
+    await expireClaims(1);
     expect(await runRetention(db)).toMatchObject({ anonymized: 1 });
-    const [p] = await db.select().from(players).where(eq(players.id, holder.playerId));
+    const p = (await db.players.findOne({ _id: holder.playerId }))!;
     expect(p.deletedAt).not.toBeNull();
   });
 
   it("works through a backlog in batches", async () => {
     for (let i = 0; i < 5; i++) await claimPlayer(`p${i}@example.com`);
     await endCampaign(200);
-    await db.execute(sql`update claims set expires_at = now() - interval '1 day'`);
+    await expireClaims(1);
     expect(await runRetention(db, new Date(), 2)).toEqual({
       due: true,
       anonymized: 2,
@@ -630,5 +678,16 @@ describe("data retention (DATA-06)", () => {
       anonymized: 3,
       remaining: 0,
     });
+  });
+
+  it("anonymizes the oldest players first", async () => {
+    const first = await claimPlayer("old@example.com");
+    await claimPlayer("middle@example.com");
+    await claimPlayer("young@example.com");
+    await endCampaign(200);
+    await expireClaims(1);
+    await runRetention(db, new Date(), 1);
+    expect((await db.players.findOne({ _id: first.playerId }))!.deletedAt).not.toBeNull();
+    expect(await db.players.countDocuments({ deletedAt: null })).toBe(2);
   });
 });

@@ -3,9 +3,8 @@
  * redeploy (SEC-08, ADM-07). Run starts read a copy cached for a few seconds per instance (500
  * starts/s, NFR-04); claims always read fresh, so a kill switch stops claims at once.
  */
-import { and, eq, gt, isNull, or, sql } from "drizzle-orm";
-import { campaignSettings, codes, rewards, type RunRules } from "@/db/schema";
 import type { Queryable } from "@/db/client";
+import { NO_EXPIRY, type RunRules } from "@/db/schema";
 import {
   DEFAULT_REWARD_RULES,
   REWARD_IDS,
@@ -45,15 +44,19 @@ function thresholdOf(id: RewardId, rule: unknown): number {
 }
 
 export async function loadCampaign(q: Queryable, now = new Date()): Promise<Campaign> {
-  const [settings] = await q.select().from(campaignSettings).where(eq(campaignSettings.id, 1));
-  const rows = await q.select().from(rewards);
-  const stock = await q
-    .select({ rewardId: codes.rewardId, n: sql<number>`count(*)::int` })
-    .from(codes)
-    .where(
-      and(eq(codes.status, "available"), or(isNull(codes.expiresAt), gt(codes.expiresAt, now))),
-    )
-    .groupBy(codes.rewardId);
+  const settings = await q.campaignSettings.findOne({ _id: 1 });
+  const rows = await q.rewards.find().toArray();
+  const stock = await q.codes
+    .aggregate<{ _id: string; n: number }>([
+      { $match: { status: "available" } },
+      {
+        $group: {
+          _id: "$rewardId",
+          n: { $sum: { $cond: [{ $gt: [{ $ifNull: ["$expiresAt", NO_EXPIRY] }, now] }, 1, 0] } },
+        },
+      },
+    ])
+    .toArray();
 
   const out = {} as Record<RewardId, RewardConfig>;
   for (const id of REWARD_IDS) {
@@ -67,16 +70,16 @@ export async function loadCampaign(q: Queryable, now = new Date()): Promise<Camp
     };
   }
   for (const row of rows) {
-    if (!isRewardId(row.id)) continue;
-    out[row.id] = {
+    if (!isRewardId(row._id)) continue;
+    out[row._id] = {
       active: row.active,
-      threshold: thresholdOf(row.id, row.rule),
+      threshold: thresholdOf(row._id, row.rule),
       validityDays: row.validityDays,
       validUntil: row.validUntil,
       available: 0,
     };
   }
-  for (const s of stock) if (isRewardId(s.rewardId)) out[s.rewardId].available = s.n;
+  for (const s of stock) if (isRewardId(s._id)) out[s._id].available = s.n;
 
   return {
     startsAt: settings?.startsAt ?? null,

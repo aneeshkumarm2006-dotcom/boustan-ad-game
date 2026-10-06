@@ -3,9 +3,8 @@
  * every consent field, so the file can be imported into a CRM by hand. The newest consent row
  * of each kind is the current one; the full history stays in the player's record.
  */
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Queryable } from "@/db/client";
-import { claims, codes, consents, players } from "@/db/schema";
+import type { PlayerDoc } from "@/db/schema";
 import { toCsv } from "@/lib/csv";
 
 export const CLAIMER_COLUMNS = [
@@ -41,42 +40,47 @@ export const CLAIMER_COLUMNS = [
 const CHUNK = 5000;
 
 export async function claimersCsv(q: Queryable, optedInOnly: boolean): Promise<string> {
-  const people = await q
-    .select()
-    .from(players)
-    .where(
-      and(
-        isNull(players.deletedAt),
-        optedInOnly ? eq(players.marketingOptIn, true) : undefined,
-        sql`exists (select 1 from ${claims} where ${claims.playerId} = ${players.id})`,
-      ),
-    )
-    .orderBy(asc(players.createdAt), asc(players.id));
+  // Everyone holding a claim, then the players among them who qualify, oldest first.
+  const claimers = (
+    await q.claims.aggregate<{ _id: string }>([{ $group: { _id: "$playerId" } }]).toArray()
+  ).map((c) => c._id);
+  const people: PlayerDoc[] = [];
+  for (let i = 0; i < claimers.length; i += CHUNK) {
+    people.push(
+      ...(await q.players
+        .find({
+          _id: { $in: claimers.slice(i, i + CHUNK) },
+          deletedAt: null,
+          ...(optedInOnly ? { marketingOptIn: true } : {}),
+        })
+        .toArray()),
+    );
+  }
+  people.sort(
+    (a, b) =>
+      a.createdAt.getTime() - b.createdAt.getTime() || (a._id < b._id ? -1 : a._id > b._id ? 1 : 0),
+  );
 
   const rows: unknown[][] = [];
   for (let i = 0; i < people.length; i += CHUNK) {
     const slice = people.slice(i, i + CHUNK);
-    const ids = slice.map((p) => p.id);
-    const held = await q
-      .select({
-        playerId: claims.playerId,
-        reward: claims.rewardId,
-        code: codes.code,
-        at: claims.createdAt,
-      })
-      .from(claims)
-      .leftJoin(codes, eq(codes.id, claims.codeId))
-      .where(inArray(claims.playerId, ids))
-      .orderBy(asc(claims.createdAt));
-    const log = await q
-      .select()
-      .from(consents)
-      .where(inArray(consents.playerId, ids))
-      .orderBy(asc(consents.createdAt), asc(consents.id));
+    const ids = slice.map((p) => p._id);
+    const claimRows = await q.claims
+      .find({ playerId: { $in: ids } })
+      .sort({ createdAt: 1 })
+      .toArray();
+    const codeDocs = await q.codes
+      .find({ _id: { $in: claimRows.flatMap((c) => (c.codeId ? [c.codeId] : [])) } })
+      .toArray();
+    const codeOf = new Map(codeDocs.map((c) => [c._id.toHexString(), c.code]));
+    const log = await q.consents
+      .find({ playerId: { $in: ids } })
+      .sort({ createdAt: 1, _id: 1 })
+      .toArray();
 
     for (const p of slice) {
-      const mine = held.filter((h) => h.playerId === p.id);
-      const history = log.filter((c) => c.playerId === p.id);
+      const mine = claimRows.filter((h) => h.playerId === p._id);
+      const history = log.filter((c) => c.playerId === p._id);
       const terms = history.filter((c) => c.kind === "terms_age" && c.granted).at(-1);
       const marketing = history.filter((c) => c.kind === "marketing").at(-1);
       rows.push([
@@ -96,15 +100,17 @@ export async function claimersCsv(q: Queryable, optedInOnly: boolean): Promise<s
         marketing?.ip,
         marketing?.userAgent,
         marketing?.hostOrigin,
-        mine.map((h) => h.reward).join("; "),
-        mine.map((h) => `${h.reward}:${h.code ?? ""}`).join("; "),
+        mine.map((h) => h.rewardId).join("; "),
+        mine
+          .map((h) => `${h.rewardId}:${(h.codeId && codeOf.get(h.codeId.toHexString())) ?? ""}`)
+          .join("; "),
         p.firstSrc,
         p.utm.utm_source,
         p.utm.utm_medium,
         p.utm.utm_campaign,
         p.utm.utm_content,
         p.firstHost,
-        mine[0]?.at,
+        mine[0]?.createdAt,
         p.createdAt,
         p.emailBlockedAt ? (p.emailBlockReason ?? "yes") : "no",
       ]);

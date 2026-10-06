@@ -8,18 +8,15 @@
  *   npm run db:demo
  */
 import { randomUUID } from "node:crypto";
-import { and, eq, like, sql } from "drizzle-orm";
 import { createDb } from "../db/client";
 import {
-  bestRuns,
-  claims,
-  codes,
-  consents,
-  emailOutbox,
-  events,
-  players,
-  rewards,
-  runs,
+  newClaim,
+  newConsent,
+  newEmailOutbox,
+  newEvent,
+  newPlayer,
+  newRun,
+  type EventDoc,
 } from "../db/schema";
 import { TUNING } from "../game-core";
 import { montrealDay, rollupEvents } from "../lib/server/analytics";
@@ -61,12 +58,9 @@ async function main() {
   if (process.env.VERCEL_ENV === "production") fail("Refusing to add demo data to production.");
   const { db, client } = createDb(scriptDatabaseUrl(), { max: 1 });
   try {
-    const [existing] = await db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(players)
-      .where(like(players.email, "%@demo.example"));
-    if (existing.n > 0) fail("Demo data is already there (players ending in @demo.example).");
-    const pool = await db.select().from(rewards);
+    const existing = await db.players.countDocuments({ email: { $regex: "@demo\\.example$" } });
+    if (existing > 0) fail("Demo data is already there (players ending in @demo.example).");
+    const pool = await db.rewards.find().toArray();
     if (pool.length === 0) fail("Run `npm run db:seed -- --open --test-codes 200` first.");
 
     const now = Date.now();
@@ -87,60 +81,71 @@ async function main() {
       const email = `player${String(i + 1).padStart(2, "0")}@demo.example`;
       const utm = { utm_source: src, utm_medium: "embed", utm_campaign: "shawarma-day" };
 
-      await db.insert(players).values({
-        id: playerId,
-        email,
-        emailNormalized: email,
-        nickname: autoNickname(rand),
-        language: lang,
-        ageConfirmedAt: at,
-        marketingOptIn: optIn,
-        firstSrc: src,
-        firstHost: `https://${src}.example`,
-        utm,
-        createdAt: at,
-        lastSeenAt: at,
-      });
-      await db.insert(runs).values({
-        id: runId,
-        seed: int(1, 1_000_000),
-        playerId,
-        src,
-        hostOrigin: `https://${src}.example`,
-        utm,
-        language: lang,
-        rules: { distanceM: 100, garlic: 10 },
-        tuningVersion: TUNING.version,
-        issuedAt: new Date(at.getTime() - 60_000),
-        finishedAt: at,
-        activeMs: Math.round(distanceM * 280),
-        distanceM,
+      await db.players.insertOne(
+        newPlayer({
+          _id: playerId,
+          email,
+          emailNormalized: email,
+          nickname: autoNickname(rand),
+          language: lang,
+          ageConfirmedAt: at,
+          marketingOptIn: optIn,
+          firstSrc: src,
+          firstHost: `https://${src}.example`,
+          utm,
+          createdAt: at,
+          lastSeenAt: at,
+        }),
+      );
+      await db.runs.insertOne(
+        newRun({
+          _id: runId,
+          seed: int(1, 1_000_000),
+          playerId,
+          src,
+          hostOrigin: `https://${src}.example`,
+          utm,
+          language: lang,
+          rules: { distanceM: 100, garlic: 10 },
+          tuningVersion: TUNING.version,
+          issuedAt: new Date(at.getTime() - 60_000),
+          finishedAt: at,
+          activeMs: Math.round(distanceM * 280),
+          distanceM,
+          garlic,
+          hits,
+          status: "valid",
+          clientVersion: "demo",
+          claimedAt: at,
+        }),
+      );
+      await db.bestRuns.insertOne({
+        _id: playerId,
+        runId,
         garlic,
         hits,
-        status: "valid",
-        clientVersion: "demo",
-        claimedAt: at,
+        distanceM,
+        achievedAt: at,
       });
-      await db
-        .insert(bestRuns)
-        .values({ playerId, runId, garlic, hits, distanceM, achievedAt: at });
 
       const kinds: ConsentKind[] = optIn ? ["terms_age", "marketing"] : ["terms_age"];
       for (const kind of kinds) {
         const c = consentText(lang, kind, true);
-        await db.insert(consents).values({
-          playerId,
-          kind,
-          granted: true,
-          text: c.text,
-          textVersion: c.version,
-          language: lang,
-          source: "claim_form",
-          ip: `203.0.113.${int(2, 250)}`,
-          userAgent: "Mozilla/5.0 (demo)",
-          hostOrigin: `https://${src}.example`,
-          createdAt: at,
-        });
+        await db.consents.insertOne(
+          newConsent({
+            playerId,
+            kind,
+            granted: true,
+            text: c.text,
+            textVersion: c.version,
+            language: lang,
+            source: "claim_form",
+            ip: `203.0.113.${int(2, 250)}`,
+            userAgent: "Mozilla/5.0 (demo)",
+            hostOrigin: `https://${src}.example`,
+            createdAt: at,
+          }),
+        );
       }
 
       const earned = [
@@ -149,51 +154,55 @@ async function main() {
       ];
       const claimIds: string[] = [];
       for (const reward of earned) {
-        const [code] = await db
-          .select()
-          .from(codes)
-          .where(and(eq(codes.rewardId, reward), eq(codes.status, "available")))
-          .orderBy(codes.id)
-          .limit(1);
+        const code = await db.codes.findOne(
+          { rewardId: reward, status: "available" },
+          { sort: { _id: 1 } },
+        );
         if (!code) continue;
         const claimId = randomUUID();
         const redeemed = rand() < 0.35;
-        await db.insert(claims).values({
-          id: claimId,
-          playerId,
-          rewardId: reward,
-          runId,
-          codeId: code.id,
-          expiresAt: new Date(at.getTime() + 30 * DAY),
-          emailStatus: "sent",
-          src,
-          utm,
-          language: lang,
-          createdAt: at,
-        });
-        await db
-          .update(codes)
-          .set({
-            status: redeemed ? "redeemed" : "assigned",
-            claimId,
-            assignedAt: at,
-            redeemedAt: redeemed ? new Date(at.getTime() + int(1, 6) * DAY) : null,
-          })
-          .where(eq(codes.id, code.id));
+        await db.claims.insertOne(
+          newClaim({
+            _id: claimId,
+            playerId,
+            rewardId: reward,
+            runId,
+            codeId: code._id,
+            expiresAt: new Date(at.getTime() + 30 * DAY),
+            emailStatus: "sent",
+            src,
+            utm,
+            language: lang,
+            createdAt: at,
+          }),
+        );
+        await db.codes.updateOne(
+          { _id: code._id },
+          {
+            $set: {
+              status: redeemed ? "redeemed" : "assigned",
+              claimId,
+              assignedAt: at,
+              redeemedAt: redeemed ? new Date(at.getTime() + int(1, 6) * DAY) : null,
+            },
+          },
+        );
         claimIds.push(claimId);
         claimsMade++;
       }
       if (claimIds.length > 0) {
-        await db.insert(emailOutbox).values({
-          playerId,
-          kind: "coupon",
-          claimIds,
-          language: lang,
-          status: "sent",
-          attempts: 1,
-          createdAt: at,
-          sentAt: at,
-        });
+        await db.emailOutbox.insertOne(
+          newEmailOutbox({
+            playerId,
+            kind: "coupon",
+            claimIds,
+            language: lang,
+            status: "sent",
+            attempts: 1,
+            createdAt: at,
+            sentAt: at,
+          }),
+        );
       }
     }
 
@@ -201,26 +210,28 @@ async function main() {
     const reasons = ["distance", "distance", "garlic", "too_fast", "hits", "version"];
     for (const flagReason of reasons) {
       const at = new Date(now - rand() * 3 * DAY);
-      await db.insert(runs).values({
-        id: randomUUID(),
-        seed: int(1, 1_000_000),
-        src: weighted(),
-        rules: { distanceM: 100, garlic: 10 },
-        tuningVersion: TUNING.version,
-        issuedAt: new Date(at.getTime() - 20_000),
-        finishedAt: at,
-        activeMs: 20_000,
-        distanceM: flagReason === "distance" ? 900 : 70,
-        garlic: flagReason === "garlic" ? 60 : 3,
-        hits: flagReason === "hits" ? 40 : 1,
-        status: "flagged",
-        flagReason,
-        clientVersion: "demo",
-      });
+      await db.runs.insertOne(
+        newRun({
+          _id: randomUUID(),
+          seed: int(1, 1_000_000),
+          src: weighted(),
+          rules: { distanceM: 100, garlic: 10 },
+          tuningVersion: TUNING.version,
+          issuedAt: new Date(at.getTime() - 20_000),
+          finishedAt: at,
+          activeMs: 20_000,
+          distanceM: flagReason === "distance" ? 900 : 70,
+          garlic: flagReason === "garlic" ? 60 : 3,
+          hits: flagReason === "hits" ? 40 : 1,
+          status: "flagged",
+          flagReason,
+          clientVersion: "demo",
+        }),
+      );
     }
 
     // ---------- ten days of funnel events ----------
-    const rows: (typeof events.$inferInsert)[] = [];
+    const rows: EventDoc[] = [];
     for (let d = days - 1; d >= 0; d--) {
       // Traffic builds towards the launch.
       const loads = Math.round(60 + (days - d) * 35 + rand() * 40);
@@ -238,7 +249,7 @@ async function main() {
           hostOrigin: `https://${src}.example`,
         };
         const ev = (name: string, props: Record<string, string | number | boolean> = {}) =>
-          rows.push({ ...base, name, props, createdAt: at });
+          rows.push(newEvent({ ...base, name, props, createdAt: at }));
         ev("load");
         if (rand() > 0.34) continue;
         const plays = 1 + Math.floor(rand() * 3);
@@ -255,14 +266,15 @@ async function main() {
         }
       }
     }
-    for (let i = 0; i < rows.length; i += 1000)
-      await db.insert(events).values(rows.slice(i, i + 1000));
+    for (let i = 0; i < rows.length; i += 1000) {
+      await db.events.insertMany(rows.slice(i, i + 1000));
+    }
     await rollupEvents(db, montrealDay(days));
 
     console.log(`Demo data added: 60 players, ${claimsMade} claims, ${rows.length} events.`);
     console.log("Open /admin (sign in with an address in ADMIN_EMAILS) and the leaderboard.");
   } finally {
-    await client.end();
+    await client.close();
   }
 }
 

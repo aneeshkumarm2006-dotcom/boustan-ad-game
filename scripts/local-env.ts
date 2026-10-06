@@ -9,14 +9,19 @@ export function loadLocalEnv(): void {
   }
 }
 
-/** The connection string for scripts: the session pooler when set (migrations need it). */
+/** The connection string for scripts: the admin user when set (migrations need it). */
 export function scriptDatabaseUrl(): string {
-  const url = process.env.DATABASE_URL_MIGRATIONS || process.env.DATABASE_URL;
+  const url = process.env.MONGODB_URI_MIGRATIONS || process.env.MONGODB_URI;
   if (!url) {
-    console.error("Set DATABASE_URL (or DATABASE_URL_MIGRATIONS) in .env.local or the shell.");
+    console.error("Set MONGODB_URI (or MONGODB_URI_MIGRATIONS) in .env.local or the shell.");
     process.exit(1);
   }
   return url;
+}
+
+/** A connection string with the credentials hidden, for messages. */
+export function describeUrl(url: string): string {
+  return url.replace(/\/\/[^@/]*@/, "//***@");
 }
 
 export function fail(error: unknown): never {

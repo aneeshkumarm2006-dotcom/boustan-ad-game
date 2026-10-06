@@ -46,6 +46,6 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# local Postgres (npm run db:local) and sandboxed emails
-/.pgdata/
+# local MongoDB (npm run db:local) and sandboxed emails
+/.mongodata/
 /.emails/

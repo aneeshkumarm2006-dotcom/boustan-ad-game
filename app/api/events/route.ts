@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { events } from "@/db/schema";
+import { newEvent } from "@/db/schema";
 import { CLIENT_EVENTS, type ClientEvent } from "@/lib/analytics-events";
 import { db } from "@/lib/server/db";
 import {
@@ -33,6 +33,9 @@ const body = z.object({
 const noContent = () =>
   new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
 
+/** MongoDB field names can't start with $ or contain dots; client-chosen prop names might. */
+const safeProp = ([key]: [string, unknown]) => !key.startsWith("$") && !key.includes(".");
+
 /**
  * POST /api/events → 204 (AN-01, AN-02). Batches from the client, sent with fetch or
  * sendBeacon (as text/plain, so no preflight). Unknown names and oversized props are dropped.
@@ -46,15 +49,21 @@ export const POST = withErrors("events", async (request: Request) => {
   const batch = parsed.data;
   const rows = batch.events
     .filter((e): e is typeof e & { name: ClientEvent } => NAMES.has(e.name))
-    .map((e) => ({
-      sessionId: batch.sessionId,
-      name: e.name,
-      props: Object.fromEntries(Object.entries(e.props ?? {}).slice(0, 8)),
-      src: batch.src,
-      lang: batch.lang,
-      device: ctx.device,
-      hostOrigin: batch.host,
-    }));
-  if (rows.length > 0) await db().insert(events).values(rows);
+    .map((e) =>
+      newEvent({
+        sessionId: batch.sessionId,
+        name: e.name,
+        props: Object.fromEntries(
+          Object.entries(e.props ?? {})
+            .filter(safeProp)
+            .slice(0, 8),
+        ),
+        src: batch.src,
+        lang: batch.lang,
+        device: ctx.device,
+        hostOrigin: batch.host,
+      }),
+    );
+  if (rows.length > 0) await db().events.insertMany(rows);
   return noContent();
 });

@@ -1,12 +1,10 @@
 "use server";
 
-import { eq } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import { campaignSettings } from "@/db/schema";
 import { REWARD_IDS, isRewardId } from "@/game-core";
 import { audit } from "@/lib/server/admin/audit";
 import { SESSION_COOKIE, requireAdmin } from "@/lib/server/admin/auth";
@@ -150,10 +148,10 @@ export async function saveAlertsAction(_prev: ActionState, fd: FormData): Promis
   }
   await db().transaction(async (tx) => {
     for (const id of REWARD_IDS) await setPoolAlerts(tx, id, thresholds[id]);
-    await tx
-      .update(campaignSettings)
-      .set({ alertEmails: emails, updatedAt: new Date(), updatedBy: admin })
-      .where(eq(campaignSettings.id, 1));
+    await tx.campaignSettings.updateOne(
+      { _id: 1 },
+      { $set: { alertEmails: emails, updatedAt: new Date(), updatedBy: admin } },
+    );
     await audit(tx, admin, "pool.alerts", null, { thresholds, recipients: emails });
   });
   revalidatePath("/admin/codes");

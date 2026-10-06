@@ -91,7 +91,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
         <section className="adm-card" aria-labelledby="actions-title">
           <h2 id="actions-title">Actions</h2>
           <ActionForm action={resendCouponAction}>
-            <input type="hidden" name="id" value={player.id} />
+            <input type="hidden" name="id" value={player._id} />
             <div className="adm-row">
               <Submit pending="Queuing…">Resend coupon email</Submit>
               <span className="adm-note">
@@ -100,7 +100,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
             </div>
           </ActionForm>
           <ActionForm action={renameAction}>
-            <input type="hidden" name="id" value={player.id} />
+            <input type="hidden" name="id" value={player._id} />
             <div className="adm-row">
               <div className="adm-field">
                 <label htmlFor="name">Leaderboard name</label>
@@ -117,7 +117,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
             <small className="adm-note">Leave blank to give a new food name.</small>
           </ActionForm>
           <ActionForm action={setHiddenAction}>
-            <input type="hidden" name="id" value={player.id} />
+            <input type="hidden" name="id" value={player._id} />
             <input type="hidden" name="hidden" value={player.hidden ? "0" : "1"} />
             <div className="adm-row">
               <Submit className="adm-btn ghost">
@@ -129,7 +129,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
             </div>
           </ActionForm>
           <div className="adm-row">
-            <a className="adm-btn ghost" href={`/api/admin/players/${player.id}/export`} download>
+            <a className="adm-btn ghost" href={`/api/admin/players/${player._id}/export`} download>
               Export this player&rsquo;s data (JSON)
             </a>
           </div>
@@ -199,7 +199,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
               </thead>
               <tbody>
                 {detail.runs.map((r) => (
-                  <tr key={r.id}>
+                  <tr key={r._id}>
                     <td>{formatMontreal(r.finishedAt)}</td>
                     <td>
                       {r.status === "valid" ? (
@@ -245,7 +245,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
               </thead>
               <tbody>
                 {detail.consents.map((c) => (
-                  <tr key={c.id}>
+                  <tr key={c._id.toHexString()}>
                     <td>{formatMontreal(c.createdAt)}</td>
                     <td>{c.kind === "terms_age" ? "Terms and 14+" : "Offers by email"}</td>
                     <td>
@@ -317,7 +317,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
           erasing lifts the block: they could return as a new player.
         </p>
         <ActionForm action={erasePlayerAction}>
-          <input type="hidden" name="id" value={player.id} />
+          <input type="hidden" name="id" value={player._id} />
           <div className="adm-row">
             <div className="adm-field">
               <label htmlFor="confirm">Type ERASE to confirm</label>

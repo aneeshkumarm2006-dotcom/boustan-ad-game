@@ -1,7 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { campaignSettings, rewards, runs } from "@/db/schema";
 import { distanceMAt } from "@/game-core";
 import recorded from "@/game-core/fixtures/recorded-runs.json";
 import { BOTH, NOTHING, connect, finish, resetDb, runTokenFor, seedCampaign } from "@/tests/db";
@@ -27,7 +25,7 @@ const body = (
   hits: r.hits,
   activeMs: r.activeMs,
 });
-const rowOf = async (id: string) => (await db.select().from(runs).where(eq(runs.id, id)))[0];
+const rowOf = async (id: string) => (await db.runs.findOne({ _id: id }))!;
 
 describe("POST /api/runs/start (SEC-01)", () => {
   it("returns a run id, a seed and a signed token, and writes nothing", async () => {
@@ -40,7 +38,7 @@ describe("POST /api/runs/start (SEC-01)", () => {
     const token = verifyToken("run", res.token, runTokenSchema);
     expect(token).toMatchObject({ id: res.runId, seed: res.seed, src: "lapresse", lang: "fr" });
     expect(token!.rules).toEqual({ distanceM: 100, garlic: 10 });
-    expect(await db.select().from(runs)).toHaveLength(0);
+    expect(await db.runs.find().toArray()).toHaveLength(0);
     expect(res.campaign).toMatchObject({
       status: "active",
       claimsEnabled: true,
@@ -49,10 +47,11 @@ describe("POST /api/runs/start (SEC-01)", () => {
   });
 
   it("reports the campaign window, kill switches and sold-out rewards (§3.4)", async () => {
-    await db
-      .update(campaignSettings)
-      .set({ claimsEnabled: false, startsAt: new Date(Date.now() + 86_400_000) });
-    await db.update(rewards).set({ active: false }).where(eq(rewards.id, "free_garlic_sauce"));
+    await db.campaignSettings.updateOne(
+      {},
+      { $set: { claimsEnabled: false, startsAt: new Date(Date.now() + 86_400_000) } },
+    );
+    await db.rewards.updateOne({ _id: "free_garlic_sauce" }, { $set: { active: false } });
     clearCampaignCache();
     const res = await startRun({ src: null, lang: "en", utm: {}, host: null });
     expect(res.campaign.status).toBe("not_started");
@@ -60,11 +59,23 @@ describe("POST /api/runs/start (SEC-01)", () => {
     expect(res.campaign.rewards.free_garlic_sauce).toEqual({ available: false, reason: "paused" });
   });
 
+  it("reports a sold-out reward, ignoring codes that expired or were already issued", async () => {
+    await db.codes.updateMany(
+      { rewardId: "free_coke", status: "available" },
+      { $set: { expiresAt: new Date(Date.now() - 1000) } },
+    );
+    await db.codes.updateMany({ rewardId: "free_garlic_sauce" }, { $set: { status: "assigned" } });
+    clearCampaignCache();
+    const res = await startRun({ src: null, lang: "en", utm: {}, host: null });
+    expect(res.campaign.rewards.free_coke).toEqual({ available: false, reason: "sold_out" });
+    expect(res.campaign.rewards.free_garlic_sauce).toEqual({
+      available: false,
+      reason: "sold_out",
+    });
+  });
+
   it("carries changed thresholds in new tokens only (ADM-07)", async () => {
-    await db
-      .update(rewards)
-      .set({ rule: { distanceM: 150 } })
-      .where(eq(rewards.id, "free_coke"));
+    await db.rewards.updateOne({ _id: "free_coke" }, { $set: { rule: { distanceM: 150 } } });
     clearCampaignCache();
     const res = await startRun({ src: null, lang: "en", utm: {}, host: null });
     expect(verifyToken("run", res.token, runTokenSchema)!.rules.distanceM).toBe(150);
@@ -106,10 +117,10 @@ describe("POST /api/runs/:id/finish (SEC-02 to SEC-04)", () => {
   });
 
   it("unlocks nothing while claims are off or the reward is paused", async () => {
-    await db.update(rewards).set({ active: false }).where(eq(rewards.id, "free_coke"));
+    await db.rewards.updateOne({ _id: "free_coke" }, { $set: { active: false } });
     clearCampaignCache();
     expect((await finish(db, BOTH())).unlocked).toEqual(["free_garlic_sauce"]);
-    await db.update(campaignSettings).set({ claimsEnabled: false });
+    await db.campaignSettings.updateOne({}, { $set: { claimsEnabled: false } });
     clearCampaignCache();
     expect((await finish(db, BOTH())).unlocked).toEqual([]);
   });
@@ -174,6 +185,18 @@ describe("POST /api/runs/:id/finish (SEC-02 to SEC-04)", () => {
       expect(await rowOf(id)).toMatchObject({ status: "valid", garlic: run.garlic });
     });
 
+    it("accepts a token once even when it is submitted many times at once", async () => {
+      const run = BOTH();
+      const { id, token } = runTokenFor(run);
+      const ctx = { playerToken: null, clientVersion: null, now: now() };
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () => finishRun(db, id, body(run, token), ctx)),
+      );
+      expect(results.filter((r) => r.response.valid)).toHaveLength(1);
+      expect(results.filter((r) => r.flag === "reused")).toHaveLength(9);
+      expect(await db.runs.countDocuments({ _id: id })).toBe(1);
+    });
+
     it("refuses a bad signature or a token for another run, writing nothing", async () => {
       const run = BOTH();
       const { id, token } = runTokenFor(run);
@@ -182,7 +205,7 @@ describe("POST /api/runs/:id/finish (SEC-02 to SEC-04)", () => {
       expect((await finishRun(db, id, body(run, tampered), ctx)).flag).toBe("bad_token");
       const other = randomUUID();
       expect((await finishRun(db, other, body(run, token), ctx)).flag).toBe("run_mismatch");
-      expect(await db.select().from(runs)).toHaveLength(0);
+      expect(await db.runs.find().toArray()).toHaveLength(0);
     });
   });
 });

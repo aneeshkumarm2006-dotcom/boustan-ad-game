@@ -4,11 +4,12 @@
  * retries and the adapters (`none`, `webhook`, `hubspot`) come in Stage 3; payloads hold ids
  * and facts, and the adapter reads the current contact when it delivers.
  */
-import type { Queryable } from "@/db/client";
-import { crmOutbox } from "@/db/schema";
+import { insertOnce, type Queryable } from "@/db/client";
+import { newCrmOutbox } from "@/db/schema";
 
 export type CrmEventType = "contact_upsert" | "reward_claimed" | "consent_changed";
 
+/** Queues one event; a second call with the same idempotency key does nothing. */
 export async function enqueueCrm(
   q: Queryable,
   playerId: string,
@@ -16,8 +17,9 @@ export async function enqueueCrm(
   payload: Record<string, unknown>,
   idempotencyKey: string,
 ): Promise<void> {
-  await q
-    .insert(crmOutbox)
-    .values({ playerId, type, payload, idempotencyKey })
-    .onConflictDoNothing({ target: crmOutbox.idempotencyKey });
+  await insertOnce(
+    q.crmOutbox,
+    { idempotencyKey },
+    newCrmOutbox({ playerId, type, payload, idempotencyKey }),
+  );
 }

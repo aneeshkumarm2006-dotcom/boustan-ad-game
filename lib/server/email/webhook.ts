@@ -3,10 +3,8 @@
  * suppression blocks every future send to that player; a complaint also withdraws marketing
  * consent, logged like an unsubscribe (CASL). Soft bounces are left to Resend's own retries.
  */
-import { and, eq, isNull } from "drizzle-orm";
 import { Webhook } from "standardwebhooks";
 import type { Db } from "@/db/client";
-import { emailOutbox, players } from "@/db/schema";
 import { normalizeEmail } from "@/lib/email";
 import { isLang } from "@/i18n";
 import { recordServerEvent } from "../analytics";
@@ -64,22 +62,22 @@ export async function handleEmailEvent(q: Db, event: EmailEvent, now = new Date(
   let playerId: string | null = null;
   let emailId: string | null = null;
   if (event.data?.email_id) {
-    const [row] = await q
-      .select({ id: emailOutbox.id, playerId: emailOutbox.playerId })
-      .from(emailOutbox)
-      .where(eq(emailOutbox.providerId, event.data.email_id));
+    const row = await q.emailOutbox.findOne(
+      { providerId: event.data.email_id },
+      { projection: { _id: 1, playerId: 1 } },
+    );
     if (row) {
       playerId = row.playerId;
-      emailId = row.id;
+      emailId = row._id;
     }
   }
   const to = event.data?.to?.[0];
   if (!playerId && to) {
-    const [row] = await q
-      .select({ id: players.id })
-      .from(players)
-      .where(eq(players.emailNormalized, normalizeEmail(to)));
-    playerId = row?.id ?? null;
+    const row = await q.players.findOne(
+      { emailNormalized: normalizeEmail(to) },
+      { projection: { _id: 1 } },
+    );
+    playerId = row?._id ?? null;
   }
   if (!playerId) {
     log.warn("email_event_unmatched", { type: event.type });
@@ -87,18 +85,18 @@ export async function handleEmailEvent(q: Db, event: EmailEvent, now = new Date(
   }
 
   await q.transaction(async (tx) => {
-    const [player] = await tx.select().from(players).where(eq(players.id, playerId!)).for("update");
+    const player = await tx.players.findOne({ _id: playerId });
     if (!player) return;
-    await tx
-      .update(players)
-      .set({ emailBlockedAt: now, emailBlockReason: kind })
-      .where(and(eq(players.id, player.id), isNull(players.emailBlockedAt)));
+    await tx.players.updateOne(
+      { _id: player._id, emailBlockedAt: null },
+      { $set: { emailBlockedAt: now, emailBlockReason: kind } },
+    );
     if (emailId) {
-      await tx.update(emailOutbox).set({ lastError: kind }).where(eq(emailOutbox.id, emailId));
+      await tx.emailOutbox.updateOne({ _id: emailId }, { $set: { lastError: kind } });
     }
     if (kind === "complained" && player.marketingOptIn) {
       await recordConsent(tx, {
-        playerId: player.id,
+        playerId: player._id,
         kind: "marketing",
         granted: false,
         lang: isLang(player.language) ? player.language : "fr",
@@ -107,13 +105,13 @@ export async function handleEmailEvent(q: Db, event: EmailEvent, now = new Date(
         userAgent: null,
         hostOrigin: null,
       });
-      await tx.update(players).set({ marketingOptIn: false }).where(eq(players.id, player.id));
+      await tx.players.updateOne({ _id: player._id }, { $set: { marketingOptIn: false } });
       await enqueueCrm(
         tx,
-        player.id,
+        player._id,
         "consent_changed",
         { marketing: false, source: "complaint" },
-        `consent:${player.id}:${now.getTime()}:complaint`,
+        `consent:${player._id}:${now.getTime()}:complaint`,
       );
     }
   });

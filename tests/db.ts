@@ -3,10 +3,9 @@
  * a seeded campaign, and runs that pass validation.
  */
 import { randomUUID } from "node:crypto";
-import { sql } from "drizzle-orm";
 import { inject } from "vitest";
 import { createDb, type Db } from "@/db/client";
-import { campaignSettings, codes, rewards } from "@/db/schema";
+import { COLLECTIONS, newCampaignSettings, newCode, newReward } from "@/db/schema";
 import { TUNING, createLevel, distanceMAt, type RewardId } from "@/game-core";
 import { clearCampaignCache } from "@/lib/server/campaign";
 import { setDbForTests } from "@/lib/server/db";
@@ -17,31 +16,14 @@ import { signToken } from "@/lib/server/tokens";
 export function connect(max = 10): { db: Db; close: () => Promise<void> } {
   const { db, client } = createDb(inject("databaseUrl"), { max });
   setDbForTests(db);
-  return { db, close: () => client.end() };
+  return { db, close: () => client.close() };
 }
 
-const TABLES = [
-  "events_daily",
-  "events",
-  "admin_audit",
-  "crm_outbox",
-  "email_outbox",
-  "claims",
-  "codes",
-  "best_runs",
-  "consents",
-  "player_tokens",
-  "runs",
-  "players",
-  "rewards",
-  "campaign_settings",
-];
-
+/** Empties every collection. The campaign settings document goes too; seedCampaign adds it. */
 export async function resetDb(db: Db): Promise<void> {
-  await db.transaction(async (tx) => {
-    await tx.execute(sql`set local boustan.allow_consent_purge = 'on'`);
-    await tx.execute(sql.raw(`truncate ${TABLES.join(", ")} restart identity cascade`));
-  });
+  for (const name of Object.values(COLLECTIONS)) {
+    await db.mongo.collection(name).deleteMany({});
+  }
   clearCampaignCache();
   resetMemoryLimitsForTests();
 }
@@ -51,42 +33,60 @@ export async function seedCampaign(
   { codesPerReward = 10, open = true }: { codesPerReward?: number; open?: boolean } = {},
 ): Promise<void> {
   const now = Date.now();
-  await db.insert(campaignSettings).values({
-    id: 1,
-    startsAt: new Date(now - 3_600_000),
-    endsAt: new Date(now + 30 * 86_400_000),
-    claimsEnabled: open,
-  });
-  await db.insert(rewards).values([
-    {
-      id: "free_coke",
+  await db.campaignSettings.insertOne(
+    newCampaignSettings({
+      startsAt: new Date(now - 3_600_000),
+      endsAt: new Date(now + 30 * 86_400_000),
+      claimsEnabled: open,
+    }),
+  );
+  await db.rewards.insertMany([
+    newReward({
+      _id: "free_coke",
       names: { fr: "Coke gratuit", en: "Free Coke" },
       terms: { fr: "…", en: "…" },
       rule: { distanceM: 100 },
       validityDays: 30,
       sortOrder: 0,
-    },
-    {
-      id: "free_garlic_sauce",
+    }),
+    newReward({
+      _id: "free_garlic_sauce",
       names: { fr: "Sauce à l'ail gratuite", en: "Free garlic sauce" },
       terms: { fr: "…", en: "…" },
       rule: { garlic: 10 },
       validityDays: 30,
       sortOrder: 1,
-    },
+    }),
   ]);
   await addCodes(db, "free_coke", codesPerReward);
   await addCodes(db, "free_garlic_sauce", codesPerReward);
   clearCampaignCache();
 }
 
+/** Adds `n` codes to a pool, in order: the first one added is the first one issued. */
 export async function addCodes(db: Db, reward: RewardId, n: number, prefix = "C"): Promise<void> {
   if (n <= 0) return;
-  const rows = Array.from({ length: n }, (_, i) => ({
-    rewardId: reward,
-    code: `${prefix}-${reward === "free_coke" ? "COKE" : "GARL"}-${String(i).padStart(4, "0")}`,
-  }));
-  await db.insert(codes).values(rows);
+  await db.codes.insertMany(
+    Array.from({ length: n }, (_, i) =>
+      newCode({
+        rewardId: reward,
+        code: `${prefix}-${reward === "free_coke" ? "COKE" : "GARL"}-${String(i).padStart(4, "0")}`,
+      }),
+    ),
+  );
+}
+
+/** Marks the `n` oldest available codes of a pool as issued, as a run of claims would. */
+export async function takeCodes(db: Db, reward: RewardId, n: number): Promise<void> {
+  const oldest = await db.codes
+    .find({ rewardId: reward, status: "available" }, { projection: { _id: 1 } })
+    .sort({ _id: 1 })
+    .limit(n)
+    .toArray();
+  await db.codes.updateMany(
+    { _id: { $in: oldest.map((c) => c._id) } },
+    { $set: { status: "assigned" } },
+  );
 }
 
 export interface HonestRun {

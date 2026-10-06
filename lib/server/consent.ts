@@ -4,7 +4,7 @@
  * counsel changes the wording, bump `consent.version` in that language's file.
  */
 import type { Queryable } from "@/db/client";
-import { consents } from "@/db/schema";
+import { newConsent } from "@/db/schema";
 import { createTranslator, splitRich, type Lang } from "@/i18n";
 
 export type ConsentKind = "terms_age" | "marketing";
@@ -39,18 +39,21 @@ export interface ConsentInput {
   hostOrigin: string | null;
 }
 
+/** Appends a consent row. This is the only write the consent log gets, besides a purge. */
 export async function recordConsent(q: Queryable, c: ConsentInput): Promise<void> {
   const { text, version } = consentText(c.lang, c.kind, c.granted);
-  await q.insert(consents).values({
-    playerId: c.playerId,
-    kind: c.kind,
-    granted: c.granted,
-    text,
-    textVersion: version,
-    language: c.lang,
-    source: c.source,
-    ip: c.ip,
-    userAgent: c.userAgent?.slice(0, 400) ?? null,
-    hostOrigin: c.hostOrigin,
-  });
+  await q.consents.insertOne(
+    newConsent({
+      playerId: c.playerId,
+      kind: c.kind,
+      granted: c.granted,
+      text,
+      textVersion: version,
+      language: c.lang,
+      source: c.source,
+      ip: c.ip,
+      userAgent: c.userAgent?.slice(0, 400) ?? null,
+      hostOrigin: c.hostOrigin,
+    }),
+  );
 }

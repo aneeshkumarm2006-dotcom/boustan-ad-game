@@ -2,64 +2,95 @@
  * Best runs and ranks (LB-01 to LB-03). Order: most garlic, fewest hits, longest distance, then
  * whoever got there first. Only players with an email have a row, and hidden or deleted
  * players don't count.
+ *
+ * Hidden players are few, so every query looks them up and leaves them out by id. A deleted
+ * player never has a row here: erasing one removes it in the same transaction (DATA-07).
  */
-import { and, asc, desc, eq, isNull, ne, sql, type SQL } from "drizzle-orm";
+import type { Filter } from "mongodb";
 import type { Queryable } from "@/db/client";
-import { bestRuns, players } from "@/db/schema";
+import type { BestRunDoc } from "@/db/schema";
 import type { RunScore } from "@/game-core";
 import type { LeaderboardEntry } from "@/lib/api/types";
 
+/** The LB-01 order. The player id (`_id`) makes it total; best_runs_rank_idx serves it. */
+export const RANK_ORDER = { garlic: -1, hits: 1, distanceM: -1, achievedAt: 1, _id: 1 } as const;
+
 /** best_runs rows that rank strictly above `s`, before tie-breaks. */
-function above(s: RunScore): SQL {
-  return sql`(${bestRuns.garlic} > ${s.garlic}
-    or (${bestRuns.garlic} = ${s.garlic} and (${bestRuns.hits} < ${s.hits}
-    or (${bestRuns.hits} = ${s.hits} and ${bestRuns.distanceM} > ${s.distanceM}))))`;
+const above = (s: RunScore): Filter<BestRunDoc> => ({
+  $or: [
+    { garlic: { $gt: s.garlic } },
+    { garlic: s.garlic, hits: { $lt: s.hits } },
+    { garlic: s.garlic, hits: s.hits, distanceM: { $gt: s.distanceM } },
+  ],
+});
+
+const same = (s: RunScore): Filter<BestRunDoc> => ({
+  garlic: s.garlic,
+  hits: s.hits,
+  distanceM: s.distanceM,
+});
+
+/** Ids of the players moderated off the board. */
+async function hiddenIds(q: Queryable): Promise<string[]> {
+  const rows = await q.players.find({ hidden: true }, { projection: { _id: 1 } }).toArray();
+  return rows.map((r) => r._id);
 }
 
-function same(s: RunScore): SQL {
-  return sql`(${bestRuns.garlic} = ${s.garlic} and ${bestRuns.hits} = ${s.hits}
-    and ${bestRuns.distanceM} = ${s.distanceM})`;
-}
+const except = (ids: string[]): Filter<BestRunDoc> =>
+  ids.length > 0 ? { _id: { $nin: ids } } : {};
 
-const visible = and(eq(players.hidden, false), isNull(players.deletedAt));
-
-/** Keeps the player's best validated run (LB-02). Only a strictly better run replaces it. */
+/**
+ * Keeps the player's best validated run (LB-02). Only a strictly better run replaces it. One
+ * atomic update decides: with no row yet it inserts, with one it compares inside the database,
+ * so two runs finishing at once can't overwrite a better score with a worse one.
+ */
 export async function updateBestRun(
   q: Queryable,
   playerId: string,
   run: RunScore & { runId: string; at: Date },
 ): Promise<void> {
-  await q
-    .insert(bestRuns)
-    .values({
-      playerId,
-      runId: run.runId,
-      garlic: run.garlic,
-      hits: run.hits,
-      distanceM: run.distanceM,
-      achievedAt: run.at,
-    })
-    .onConflictDoUpdate({
-      target: bestRuns.playerId,
-      set: {
-        runId: sql`excluded.run_id`,
-        garlic: sql`excluded.garlic`,
-        hits: sql`excluded.hits`,
-        distanceM: sql`excluded.distance_m`,
-        achievedAt: sql`excluded.achieved_at`,
+  const next = {
+    runId: run.runId,
+    garlic: run.garlic,
+    hits: run.hits,
+    distanceM: run.distanceM,
+    achievedAt: run.at,
+  };
+  const better = {
+    $or: [
+      { $eq: [{ $type: "$garlic" }, "missing"] },
+      { $gt: [run.garlic, "$garlic"] },
+      {
+        $and: [
+          { $eq: [run.garlic, "$garlic"] },
+          {
+            $or: [
+              { $lt: [run.hits, "$hits"] },
+              { $and: [{ $eq: [run.hits, "$hits"] }, { $gt: [run.distanceM, "$distanceM"] }] },
+            ],
+          },
+        ],
       },
-      setWhere: sql`excluded.garlic > ${bestRuns.garlic}
-        or (excluded.garlic = ${bestRuns.garlic} and (excluded.hits < ${bestRuns.hits}
-        or (excluded.hits = ${bestRuns.hits} and excluded.distance_m > ${bestRuns.distanceM})))`,
-    });
+    ],
+  };
+  await q.bestRuns.updateOne(
+    { _id: playerId },
+    [
+      {
+        $replaceWith: {
+          $cond: [better, { $mergeObjects: [{ _id: "$_id" }, { $literal: next }] }, "$$ROOT"],
+        },
+      },
+    ],
+    { upsert: true },
+  );
 }
 
 export async function bestOf(q: Queryable, playerId: string): Promise<RunScore | null> {
-  const [row] = await q
-    .select({ garlic: bestRuns.garlic, hits: bestRuns.hits, distanceM: bestRuns.distanceM })
-    .from(bestRuns)
-    .where(eq(bestRuns.playerId, playerId));
-  return row ?? null;
+  return q.bestRuns.findOne<RunScore>(
+    { _id: playerId },
+    { projection: { _id: 0, garlic: 1, hits: 1, distanceM: 1 } },
+  );
 }
 
 /**
@@ -71,49 +102,33 @@ export async function rankPreview(
   score: RunScore,
   exceptPlayerId: string | null,
 ): Promise<number> {
-  const [row] = await q
-    .select({ n: sql<number>`count(*)::int` })
-    .from(bestRuns)
-    .innerJoin(players, eq(players.id, bestRuns.playerId))
-    .where(
-      and(
-        visible,
-        sql`(${above(score)} or ${same(score)})`,
-        exceptPlayerId ? ne(bestRuns.playerId, exceptPlayerId) : undefined,
-      ),
-    );
-  return 1 + (row?.n ?? 0);
+  const skip = await hiddenIds(q);
+  if (exceptPlayerId) skip.push(exceptPlayerId);
+  const n = await q.bestRuns.countDocuments({
+    $and: [except(skip), { $or: [above(score), same(score)] }],
+  });
+  return 1 + n;
 }
 
 /** The player's own rank, computed fresh (LB-08). Null without a best run or when hidden. */
 export async function rankOfPlayer(q: Queryable, playerId: string): Promise<number | null> {
-  const [me] = await q
-    .select({
-      garlic: bestRuns.garlic,
-      hits: bestRuns.hits,
-      distanceM: bestRuns.distanceM,
-      at: bestRuns.achievedAt,
-      hidden: players.hidden,
-    })
-    .from(bestRuns)
-    .innerJoin(players, eq(players.id, bestRuns.playerId))
-    .where(eq(bestRuns.playerId, playerId));
-  if (!me || me.hidden) return null;
-  // Raw SQL skips Drizzle's column mapping, and its postgres.js driver takes dates as strings.
-  const at = me.at.toISOString();
-  const [row] = await q
-    .select({ n: sql<number>`count(*)::int` })
-    .from(bestRuns)
-    .innerJoin(players, eq(players.id, bestRuns.playerId))
-    .where(
-      and(
-        visible,
-        ne(bestRuns.playerId, playerId),
-        sql`(${above(me)} or (${same(me)} and (${bestRuns.achievedAt} < ${at}
-          or (${bestRuns.achievedAt} = ${at} and ${bestRuns.playerId} < ${playerId}))))`,
-      ),
-    );
-  return 1 + (row?.n ?? 0);
+  const me = await q.bestRuns.findOne({ _id: playerId });
+  if (!me) return null;
+  const owner = await q.players.findOne({ _id: playerId }, { projection: { hidden: 1 } });
+  if (!owner || owner.hidden) return null;
+  const n = await q.bestRuns.countDocuments({
+    $and: [
+      except(await hiddenIds(q)),
+      {
+        $or: [
+          above(me),
+          { ...same(me), achievedAt: { $lt: me.achievedAt } },
+          { ...same(me), achievedAt: me.achievedAt, _id: { $lt: playerId } },
+        ],
+      },
+    ],
+  });
+  return 1 + n;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -139,26 +154,17 @@ const toEntry = (
 
 /** The top of the board in LB-01 order. Names only: no email ever leaves this file (LB-05). */
 export async function topEntries(q: Queryable, limit: number): Promise<LeaderboardEntry[]> {
-  const rows = await q
-    .select({
-      nickname: players.nickname,
-      garlic: bestRuns.garlic,
-      hits: bestRuns.hits,
-      distanceM: bestRuns.distanceM,
-    })
-    .from(bestRuns)
-    .innerJoin(players, eq(players.id, bestRuns.playerId))
-    .where(visible)
+  const rows = await q.bestRuns
+    .find(except(await hiddenIds(q)))
     // The player id makes the order total, so it matches rankOfPlayer exactly.
-    .orderBy(
-      desc(bestRuns.garlic),
-      asc(bestRuns.hits),
-      desc(bestRuns.distanceM),
-      asc(bestRuns.achievedAt),
-      asc(bestRuns.playerId),
-    )
-    .limit(limit);
-  return rows.map((row, i) => toEntry(i + 1, row));
+    .sort(RANK_ORDER)
+    .limit(limit)
+    .toArray();
+  const owners = await q.players
+    .find({ _id: { $in: rows.map((r) => r._id) } }, { projection: { nickname: 1 } })
+    .toArray();
+  const names = new Map(owners.map((p) => [p._id, p.nickname]));
+  return rows.map((row, i) => toEntry(i + 1, { ...row, nickname: names.get(row._id) ?? null }));
 }
 
 /** The player's own row with a freshly computed rank (LB-08), or null when not on the board. */
@@ -168,17 +174,10 @@ export async function entryOfPlayer(
 ): Promise<LeaderboardEntry | null> {
   const rank = await rankOfPlayer(q, playerId);
   if (rank === null) return null;
-  const [row] = await q
-    .select({
-      nickname: players.nickname,
-      garlic: bestRuns.garlic,
-      hits: bestRuns.hits,
-      distanceM: bestRuns.distanceM,
-    })
-    .from(bestRuns)
-    .innerJoin(players, eq(players.id, bestRuns.playerId))
-    .where(eq(bestRuns.playerId, playerId));
-  return row ? toEntry(rank, row) : null;
+  const row = await q.bestRuns.findOne({ _id: playerId });
+  if (!row) return null;
+  const owner = await q.players.findOne({ _id: playerId }, { projection: { nickname: 1 } });
+  return toEntry(rank, { ...row, nickname: owner?.nickname ?? null });
 }
 
 const topCache = new Map<number, { at: number; value: Promise<LeaderboardEntry[]> }>();

@@ -3,9 +3,7 @@
  * consent log, turns marketing off and queues the change for the CRM (CRM-07: unsubscribes are
  * always passed on). Repeat clicks log again; that's harmless and keeps the record complete.
  */
-import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@/db/client";
-import { players } from "@/db/schema";
 import { isLang, type Lang } from "@/i18n";
 import { recordConsent } from "./consent";
 import { enqueueCrm } from "./crm-outbox";
@@ -19,15 +17,11 @@ export async function unsubscribe(
   const payload = verifyToken("unsubscribe", token, unsubscribeTokenSchema);
   if (!payload) return null;
   return q.transaction(async (tx) => {
-    const [player] = await tx
-      .select()
-      .from(players)
-      .where(and(eq(players.id, payload.p), isNull(players.deletedAt)))
-      .for("update");
+    const player = await tx.players.findOne({ _id: payload.p, deletedAt: null });
     if (!player) return null;
     const lang: Lang = isLang(player.language) ? player.language : "fr";
     await recordConsent(tx, {
-      playerId: player.id,
+      playerId: player._id,
       kind: "marketing",
       granted: false,
       lang,
@@ -36,13 +30,13 @@ export async function unsubscribe(
       userAgent: ctx.userAgent,
       hostOrigin: null,
     });
-    await tx.update(players).set({ marketingOptIn: false }).where(eq(players.id, player.id));
+    await tx.players.updateOne({ _id: player._id }, { $set: { marketingOptIn: false } });
     await enqueueCrm(
       tx,
-      player.id,
+      player._id,
       "consent_changed",
       { marketing: false, source: "unsubscribe" },
-      `consent:${player.id}:${ctx.now.getTime()}:unsubscribe`,
+      `consent:${player._id}:${ctx.now.getTime()}:unsubscribe`,
     );
     return { lang };
   });

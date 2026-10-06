@@ -2,9 +2,8 @@
  * Moderation views (ADM-05, LB-07): the board as admins see it, with ids and emails and the
  * hidden entries, and the runs the validator flagged.
  */
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import type { Queryable } from "@/db/client";
-import { bestRuns, players, runs } from "@/db/schema";
+import { RANK_ORDER } from "../leaderboard";
 
 export interface ModerationEntry {
   playerId: string;
@@ -21,30 +20,29 @@ export interface ModerationEntry {
 
 /** Everyone with a best run in leaderboard order, hidden ones marked and unranked. */
 export async function boardForModeration(q: Queryable, limit = 200): Promise<ModerationEntry[]> {
-  const rows = await q
-    .select({
-      playerId: players.id,
-      nickname: players.nickname,
-      email: players.email,
-      hidden: players.hidden,
-      garlic: bestRuns.garlic,
-      hits: bestRuns.hits,
-      distanceM: bestRuns.distanceM,
-      achievedAt: bestRuns.achievedAt,
-    })
-    .from(bestRuns)
-    .innerJoin(players, eq(players.id, bestRuns.playerId))
-    .where(isNull(players.deletedAt))
-    .orderBy(
-      desc(bestRuns.garlic),
-      asc(bestRuns.hits),
-      desc(bestRuns.distanceM),
-      asc(bestRuns.achievedAt),
-      asc(bestRuns.playerId),
-    )
-    .limit(limit);
+  const best = await q.bestRuns.find().sort(RANK_ORDER).limit(limit).toArray();
+  const owners = await q.players
+    .find({ _id: { $in: best.map((b) => b._id) }, deletedAt: null })
+    .toArray();
+  const byId = new Map(owners.map((p) => [p._id, p]));
   let rank = 0;
-  return rows.map((r) => ({ ...r, rank: r.hidden ? null : ++rank }));
+  return best.flatMap((b) => {
+    const p = byId.get(b._id);
+    if (!p) return [];
+    return [
+      {
+        playerId: p._id,
+        rank: p.hidden ? null : ++rank,
+        nickname: p.nickname,
+        email: p.email,
+        hidden: p.hidden,
+        garlic: b.garlic,
+        hits: b.hits,
+        distanceM: b.distanceM,
+        achievedAt: b.achievedAt,
+      },
+    ];
+  });
 }
 
 export interface FlaggedRun {
@@ -62,34 +60,38 @@ export interface FlaggedRun {
 }
 
 export async function flaggedRuns(q: Queryable, limit = 100): Promise<FlaggedRun[]> {
-  const rows = await q
-    .select({
-      id: runs.id,
-      finishedAt: runs.finishedAt,
-      reason: runs.flagReason,
-      distanceM: runs.distanceM,
-      garlic: runs.garlic,
-      hits: runs.hits,
-      activeMs: runs.activeMs,
-      src: runs.src,
-      hostOrigin: runs.hostOrigin,
-      clientVersion: runs.clientVersion,
-      playerId: runs.playerId,
-    })
-    .from(runs)
-    .where(eq(runs.status, "flagged"))
-    .orderBy(desc(runs.finishedAt))
-    .limit(limit);
-  return rows;
+  const rows = await q.runs
+    .find({ status: "flagged" })
+    .sort({ finishedAt: -1 })
+    .limit(limit)
+    .toArray();
+  return rows.map((r) => ({
+    id: r._id,
+    finishedAt: r.finishedAt,
+    reason: r.flagReason,
+    distanceM: r.distanceM,
+    garlic: r.garlic,
+    hits: r.hits,
+    activeMs: r.activeMs,
+    src: r.src,
+    hostOrigin: r.hostOrigin,
+    clientVersion: r.clientVersion,
+    playerId: r.playerId,
+  }));
 }
 
 /** Flag counts by reason over the last 7 days, for the summary strip. */
-export async function flagSummary(q: Queryable): Promise<{ reason: string; n: number }[]> {
-  const rows = await q
-    .select({ reason: runs.flagReason, n: sql<number>`count(*)::int` })
-    .from(runs)
-    .where(and(eq(runs.status, "flagged"), sql`${runs.finishedAt} > now() - interval '7 days'`))
-    .groupBy(runs.flagReason)
-    .orderBy(desc(sql`count(*)`));
-  return rows.map((r) => ({ reason: r.reason ?? "unknown", n: r.n }));
+export async function flagSummary(
+  q: Queryable,
+  now = new Date(),
+): Promise<{ reason: string; n: number }[]> {
+  const since = new Date(now.getTime() - 7 * 86_400_000);
+  const rows = await q.runs
+    .aggregate<{ _id: string | null; n: number }>([
+      { $match: { status: "flagged", finishedAt: { $gt: since } } },
+      { $group: { _id: "$flagReason", n: { $sum: 1 } } },
+      { $sort: { n: -1, _id: 1 } },
+    ])
+    .toArray();
+  return rows.map((r) => ({ reason: r._id ?? "unknown", n: r.n }));
 }

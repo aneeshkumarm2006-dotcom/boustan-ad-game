@@ -1,7 +1,7 @@
 // Server configuration for tests. Real services stay off: no Turnstile secret, sandboxed email
 // written nowhere (tests pass their own sender), in-memory rate limits set high.
 process.env.RUN_TOKEN_SECRET ??= "test-secret-test-secret-test-secret-0123456789";
-process.env.DATABASE_URL ??= "postgres://unused@localhost:1/unused";
+process.env.MONGODB_URI ??= "mongodb://unused@localhost:1/unused";
 process.env.EMAIL_SANDBOX = "1";
 process.env.TURNSTILE_SECRET = "";
 process.env.UPSTASH_REDIS_REST_URL = "";

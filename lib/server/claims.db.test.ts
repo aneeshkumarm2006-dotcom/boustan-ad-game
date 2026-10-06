@@ -1,17 +1,6 @@
-import { and, eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  bestRuns,
-  campaignSettings,
-  claims,
-  codes,
-  consents,
-  crmOutbox,
-  emailOutbox,
-  players,
-  rewards,
-  runs,
-} from "@/db/schema";
+import { newClaim, newCode } from "@/db/schema";
 import { BOTH, NOTHING, connect, ctx, finish, honestRun, resetDb, seedCampaign } from "@/tests/db";
 import { claimRewards, type ClaimInput } from "./claims";
 import { signToken } from "./tokens";
@@ -65,7 +54,7 @@ describe("POST /api/claim", () => {
     const expiry = new Date(r.codes[0].expiresAt).getTime() - Date.now();
     expect(Math.round(expiry / 86_400_000)).toBe(30);
 
-    const [player] = await db.select().from(players);
+    const player = (await db.players.findOne())!;
     expect(player).toMatchObject({
       email: "Alex.Tremblay+jeu@gmail.com",
       emailNormalized: "alextremblay@gmail.com",
@@ -77,30 +66,30 @@ describe("POST /api/claim", () => {
     });
     expect(player.ageConfirmedAt).not.toBeNull();
 
-    const issued = await db.select().from(codes).where(eq(codes.status, "assigned"));
+    const issued = await db.codes.find({ status: "assigned" }).toArray();
     expect(issued).toHaveLength(2);
-    const claimRows = await db.select().from(claims);
+    const claimRows = await db.claims.find().toArray();
     expect(claimRows.every((c) => c.codeId && c.src === "lapresse" && c.runId === run.runId)).toBe(
       true,
     );
 
-    const [email] = await db.select().from(emailOutbox);
+    const email = (await db.emailOutbox.findOne())!;
     expect(email).toMatchObject({ kind: "coupon", status: "pending", language: "fr" });
-    expect(email.claimIds.sort()).toEqual(claimRows.map((c) => c.id).sort());
-    expect(res.emailId).toBe(email.id);
+    expect([...email.claimIds].sort()).toEqual(claimRows.map((c) => c._id).sort());
+    expect(res.emailId).toBe(email._id);
 
-    const crm = await db.select().from(crmOutbox);
+    const crm = await db.crmOutbox.find().toArray();
     expect(crm.map((c) => c.type).sort()).toEqual(["contact_upsert", "reward_claimed"]);
 
-    const [spent] = await db.select().from(runs).where(eq(runs.id, run.runId));
+    const spent = (await db.runs.findOne({ _id: run.runId }))!;
     expect(spent.claimedAt).not.toBeNull();
-    expect(spent.playerId).toBe(player.id);
+    expect(spent.playerId).toBe(player._id);
   });
 
   it("records consent with its text, version, language, IP and host (DATA-03, AC-07)", async () => {
     const run = await finish(db, BOTH());
     await claimOk(form(run.claimToken!, "opt@in.ca", { marketingOptIn: true, lang: "en" }));
-    const rows = await db.select().from(consents).orderBy(consents.id);
+    const rows = await db.consents.find().sort({ _id: 1 }).toArray();
     expect(rows.map((c) => [c.kind, c.granted])).toEqual([
       ["terms_age", true],
       ["marketing", true],
@@ -114,9 +103,9 @@ describe("POST /api/claim", () => {
       userAgent: "vitest",
       hostOrigin: "https://host.example",
     });
-    const [player] = await db.select().from(players);
+    const player = (await db.players.findOne())!;
     expect(player.marketingOptIn).toBe(true);
-    expect((await db.select().from(crmOutbox)).some((c) => c.type === "consent_changed")).toBe(
+    expect((await db.crmOutbox.find().toArray()).some((c) => c.type === "consent_changed")).toBe(
       true,
     );
   });
@@ -126,9 +115,9 @@ describe("POST /api/claim", () => {
     await claimOk(form(first.claimToken!, "keep@in.ca", { marketingOptIn: true }));
     const second = await finish(db, NOTHING());
     await claimOk(form(second.claimToken!, "keep@in.ca", { marketingOptIn: false }));
-    const [player] = await db.select().from(players);
+    const player = (await db.players.findOne())!;
     expect(player.marketingOptIn).toBe(true);
-    const marketing = await db.select().from(consents).where(eq(consents.kind, "marketing"));
+    const marketing = await db.consents.find({ kind: "marketing" }).toArray();
     expect(marketing).toHaveLength(1);
   });
 
@@ -140,13 +129,13 @@ describe("POST /api/claim", () => {
     expect(again.response.codes).toEqual([]);
     expect(again.response.alreadyClaimed).toEqual(["free_coke", "free_garlic_sauce"]);
     expect(again.alreadyClaimIds.sort()).toEqual(
-      (await db.select({ id: claims.id }).from(claims)).map((c) => c.id).sort(),
+      (await db.claims.find().toArray()).map((c) => c._id).sort(),
     );
     expect(again.playerId).toBe(original.playerId);
-    expect(await db.select().from(players)).toHaveLength(1);
-    expect(await db.select().from(codes).where(eq(codes.status, "assigned"))).toHaveLength(2);
+    expect(await db.players.find().toArray()).toHaveLength(1);
+    expect(await db.codes.find({ status: "assigned" }).toArray()).toHaveLength(2);
     // The address on file is the one first typed (MAIL-08).
-    expect((await db.select().from(players))[0].email).toBe("sam.roy@gmail.com");
+    expect((await db.players.findOne())!.email).toBe("sam.roy@gmail.com");
   });
 
   it("recognizes a returning device for a one-tap claim (DATA-01, §3.3)", async () => {
@@ -158,12 +147,14 @@ describe("POST /api/claim", () => {
     const second = await finish(db, honestRun(4, 26, 11), token);
     expect(second.unlocked).toEqual(["free_coke", "free_garlic_sauce"]);
     expect(second.best!.garlic).toBeGreaterThanOrEqual(10);
+    // The best score is the three numbers, nothing else of the stored row.
+    expect(Object.keys(second.best!).sort()).toEqual(["distanceM", "garlic", "hits"]);
     const tap = await claimOk(oneTap(second.claimToken!, token));
     expect(tap.response.codes.map((c) => c.reward)).toEqual(["free_garlic_sauce"]);
     expect(tap.response.alreadyClaimed).toEqual(["free_coke"]);
     expect(tap.response.playerToken).toBe(token);
     // One-tap shows no form, so it records no new consent.
-    expect(await db.select().from(consents)).toHaveLength(1);
+    expect(await db.consents.find().toArray()).toHaveLength(1);
   });
 
   it("refuses an unknown device token so the form can ask again", async () => {
@@ -179,30 +170,30 @@ describe("POST /api/claim", () => {
     const res = await claimOk(form(run.claimToken!, "score@only.ca"));
     expect(res.response).toMatchObject({ codes: [], alreadyClaimed: [], unavailable: [], rank: 1 });
     expect(res.emailId).toBeNull();
-    const [best] = await db.select().from(bestRuns);
+    const best = (await db.bestRuns.findOne())!;
     expect(best).toMatchObject({ runId: run.runId, garlic: NOTHING().garlic });
-    expect(await db.select().from(emailOutbox)).toHaveLength(0);
+    expect(await db.emailOutbox.find().toArray()).toHaveLength(0);
   });
 
   it("says All gone when the pool is empty, and doesn't half-claim (RWD-04)", async () => {
-    await db.execute(sql`delete from codes where reward_id = 'free_coke'`);
+    await db.codes.deleteMany({ rewardId: "free_coke" });
     const run = await finish(db, BOTH());
     const res = await claimOk(form(run.claimToken!, "late@comer.ca"));
     expect(res.response.codes.map((c) => c.reward)).toEqual(["free_garlic_sauce"]);
     expect(res.response.unavailable).toEqual(["free_coke"]);
-    const rows = await db.select().from(claims);
+    const rows = await db.claims.find().toArray();
     expect(rows.map((c) => c.rewardId)).toEqual(["free_garlic_sauce"]);
   });
 
   it("honours the kill switches at claim time (SEC-08)", async () => {
     const run = await finish(db, BOTH());
-    await db.update(rewards).set({ active: false }).where(eq(rewards.id, "free_garlic_sauce"));
+    await db.rewards.updateOne({ _id: "free_garlic_sauce" }, { $set: { active: false } });
     const res = await claimOk(form(run.claimToken!, "switch@test.ca"));
     expect(res.response.codes.map((c) => c.reward)).toEqual(["free_coke"]);
     expect(res.response.unavailable).toEqual(["free_garlic_sauce"]);
 
     const run2 = await finish(db, BOTH(12));
-    await db.update(campaignSettings).set({ claimsEnabled: false });
+    await db.campaignSettings.updateOne({}, { $set: { claimsEnabled: false } });
     const res2 = await claimOk(form(run2.claimToken!, "switch2@test.ca"));
     expect(res2.response.codes).toEqual([]);
     expect(res2.response.unavailable).toEqual(["free_coke", "free_garlic_sauce"]);
@@ -231,7 +222,7 @@ describe("POST /api/claim", () => {
       ok: false,
       error: "rejected",
     });
-    await db.update(runs).set({ status: "flagged" }).where(eq(runs.id, run.runId));
+    await db.runs.updateOne({ _id: run.runId }, { $set: { status: "flagged" } });
     expect(await claimRewards(db, form(run.claimToken!, "a@test.ca"), ctx())).toEqual({
       ok: false,
       error: "rejected",
@@ -247,23 +238,51 @@ describe("POST /api/claim", () => {
     expect(
       await claimRewards(db, form(run.claimToken!, "x@ok.ca", { termsAge: false }), ctx()),
     ).toEqual({ ok: false, error: "rejected" });
-    expect(await db.select().from(players)).toHaveLength(0);
+    expect(await db.players.find().toArray()).toHaveLength(0);
   });
 
-  it("enforces one claim per player per reward in the database (SEC-07)", async () => {
+  it("enforces one claim per player per reward, and one claim per code, in the database (SEC-07)", async () => {
     const run = await finish(db, BOTH());
     const res = await claimOk(form(run.claimToken!, "unique@test.ca"));
     await expect(
-      db.insert(claims).values({
-        playerId: res.playerId,
-        rewardId: "free_coke",
-        runId: run.runId,
-        language: "fr",
-      }),
-    ).rejects.toThrow();
+      db.claims.insertOne(
+        newClaim({
+          playerId: res.playerId,
+          rewardId: "free_coke",
+          runId: run.runId,
+          language: "fr",
+        }),
+      ),
+    ).rejects.toThrow(/duplicate key/);
     await expect(
-      db.insert(codes).values({ rewardId: "free_coke", code: res.response.codes[0].code }),
-    ).rejects.toThrow();
+      db.codes.insertOne(newCode({ rewardId: "free_coke", code: res.response.codes[0].code })),
+    ).rejects.toThrow(/duplicate key/);
+
+    // Another player's claim can't take a code that already backs one.
+    const taken = (await db.claims.findOne({ rewardId: "free_coke" }))!;
+    await expect(
+      db.claims.insertOne(
+        newClaim({
+          playerId: randomUUID(),
+          rewardId: "free_coke",
+          runId: run.runId,
+          language: "fr",
+          codeId: taken.codeId,
+        }),
+      ),
+    ).rejects.toThrow(/duplicate key/);
+
+    // Claims that don't hold a code yet are not in that index, so any number can coexist.
+    for (let i = 0; i < 2; i++) {
+      await db.claims.insertOne(
+        newClaim({
+          playerId: randomUUID(),
+          rewardId: "free_coke",
+          runId: run.runId,
+          language: "fr",
+        }),
+      );
+    }
   });
 });
 
@@ -271,9 +290,11 @@ describe("code assignment under load (RWD-03, AC-04)", () => {
   it("gives 200 simultaneous claims on a 100-code pool exactly 100 distinct codes", async () => {
     await resetDb(db);
     await seedCampaign(db, { codesPerReward: 0 });
-    await db.execute(sql`
-      insert into codes (reward_id, code)
-      select 'free_coke', 'LOAD-' || lpad(i::text, 4, '0') from generate_series(1, 100) i`);
+    await db.codes.insertMany(
+      Array.from({ length: 100 }, (_, i) =>
+        newCode({ rewardId: "free_coke", code: `LOAD-${String(i + 1).padStart(4, "0")}` }),
+      ),
+    );
     const runs200 = await Promise.all(
       Array.from({ length: 200 }, (_, i) => finish(db, honestRun(1000 + i, 25, 0))),
     );
@@ -289,18 +310,26 @@ describe("code assignment under load (RWD-03, AC-04)", () => {
     expect(new Set(issued).size).toBe(100);
     expect(ok.filter((r) => r.response.unavailable.includes("free_coke"))).toHaveLength(100);
 
-    const [counts] = await db
-      .select({
-        assigned: sql<number>`count(*) filter (where status = 'assigned')::int`,
-        available: sql<number>`count(*) filter (where status = 'available')::int`,
-      })
-      .from(codes);
-    expect(counts).toEqual({ assigned: 100, available: 0 });
-    const claimed = await db
-      .select()
-      .from(claims)
-      .where(and(eq(claims.rewardId, "free_coke")));
+    expect({
+      assigned: await db.codes.countDocuments({ status: "assigned" }),
+      available: await db.codes.countDocuments({ status: "available" }),
+    }).toEqual({ assigned: 100, available: 0 });
+    const claimed = await db.claims.find({ rewardId: "free_coke" }).toArray();
     expect(claimed).toHaveLength(100);
-    expect(new Set(claimed.map((c) => c.codeId)).size).toBe(100);
+    expect(new Set(claimed.map((c) => String(c.codeId))).size).toBe(100);
+  });
+
+  it("gives one player claiming the same run twice at once a single set of codes", async () => {
+    const run = await finish(db, BOTH());
+    const [a, b] = await Promise.all([
+      claimRewards(db, form(run.claimToken!, "twice@test.ca"), ctx()),
+      claimRewards(db, form(run.claimToken!, "twice@test.ca"), ctx()),
+    ]);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.response.codes).toEqual(b.response.codes);
+    expect(await db.claims.find().toArray()).toHaveLength(2);
+    expect(await db.codes.find({ status: "assigned" }).toArray()).toHaveLength(2);
+    expect(await db.emailOutbox.find().toArray()).toHaveLength(1);
   });
 });

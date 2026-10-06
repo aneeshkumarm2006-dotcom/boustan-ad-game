@@ -6,27 +6,16 @@
  * device tokens) and the leaderboard row, and keeps anonymous totals: the player row stays
  * with an anonymized address so runs, claims and codes still add up (DATA-07).
  */
-import { and, desc, eq, ilike, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import type { Db, Queryable } from "@/db/client";
-import {
-  bestRuns,
-  claims,
-  codes,
-  consents,
-  crmOutbox,
-  emailOutbox,
-  playerTokens,
-  players,
-  runs,
-} from "@/db/schema";
+import type { PlayerDoc } from "@/db/schema";
 import { autoNickname } from "@/lib/nicknames";
 import { isValidNickname } from "@/lib/email";
 import { queueResend } from "../email/deliver";
 
-export type PlayerRow = typeof players.$inferSelect;
+export type PlayerRow = PlayerDoc;
 
-/** Escapes % _ \ so a search term is matched literally. */
-const like = (term: string) => `%${term.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+/** Escapes regex characters so a search term is matched literally. */
+const literal = (term: string) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export interface PlayerSummary {
   id: string;
@@ -46,86 +35,85 @@ export async function searchPlayers(
   limit = 50,
 ): Promise<PlayerSummary[]> {
   const t = term.trim().slice(0, 100);
-  const rows = await q
-    .select({
-      id: players.id,
-      email: players.email,
-      nickname: players.nickname,
-      language: players.language,
-      hidden: players.hidden,
-      marketingOptIn: players.marketingOptIn,
-      createdAt: players.createdAt,
-      // Written out in full: Drizzle drops table names inside a single-table select.
-      claimCount: sql<number>`(select count(*)::int from claims c where c.player_id = players.id)`,
-    })
-    .from(players)
-    .where(
-      and(
-        isNull(players.deletedAt),
-        t ? or(ilike(players.email, like(t)), ilike(players.nickname, like(t))) : undefined,
-      ),
-    )
-    .orderBy(desc(players.createdAt))
-    .limit(limit);
-  return rows;
+  const match = { $regex: literal(t), $options: "i" };
+  const rows = await q.players
+    .find({ deletedAt: null, ...(t ? { $or: [{ email: match }, { nickname: match }] } : {}) })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .toArray();
+  const counts = await q.claims
+    .aggregate<{ _id: string; n: number }>([
+      { $match: { playerId: { $in: rows.map((p) => p._id) } } },
+      { $group: { _id: "$playerId", n: { $sum: 1 } } },
+    ])
+    .toArray();
+  const claimCount = new Map(counts.map((c) => [c._id, c.n]));
+  return rows.map((p) => ({
+    id: p._id,
+    email: p.email,
+    nickname: p.nickname,
+    language: p.language,
+    hidden: p.hidden,
+    marketingOptIn: p.marketingOptIn,
+    createdAt: p.createdAt,
+    claimCount: claimCount.get(p._id) ?? 0,
+  }));
 }
 
 export async function playerDetail(q: Queryable, id: string) {
-  const [player] = await q.select().from(players).where(eq(players.id, id));
+  const player = await q.players.findOne({ _id: id });
   if (!player) return null;
-  const [best] = await q.select().from(bestRuns).where(eq(bestRuns.playerId, id));
-  const playerRuns = await q
-    .select()
-    .from(runs)
-    .where(eq(runs.playerId, id))
-    .orderBy(desc(runs.finishedAt))
-    .limit(50);
-  const playerClaims = await q
-    .select({
-      id: claims.id,
-      reward: claims.rewardId,
-      code: codes.code,
-      codeStatus: codes.status,
-      expiresAt: claims.expiresAt,
-      emailStatus: claims.emailStatus,
-      src: claims.src,
-      createdAt: claims.createdAt,
-    })
-    .from(claims)
-    .leftJoin(codes, eq(codes.id, claims.codeId))
-    .where(eq(claims.playerId, id))
-    .orderBy(desc(claims.createdAt));
-  const playerConsents = await q
-    .select()
-    .from(consents)
-    .where(eq(consents.playerId, id))
-    .orderBy(desc(consents.createdAt));
-  const emails = await q
-    .select({
-      id: emailOutbox.id,
-      kind: emailOutbox.kind,
-      status: emailOutbox.status,
-      attempts: emailOutbox.attempts,
-      lastError: emailOutbox.lastError,
-      createdAt: emailOutbox.createdAt,
-      sentAt: emailOutbox.sentAt,
-    })
-    .from(emailOutbox)
-    .where(eq(emailOutbox.playerId, id))
-    .orderBy(desc(emailOutbox.createdAt))
-    .limit(20);
-  const [devices] = await q
-    .select({ n: sql<number>`count(*)::int` })
-    .from(playerTokens)
-    .where(eq(playerTokens.playerId, id));
+  const best = await q.bestRuns.findOne({ _id: id });
+  const playerRuns = await q.runs
+    .find({ playerId: id })
+    .sort({ finishedAt: -1 })
+    .limit(50)
+    .toArray();
+  const claimRows = await q.claims.find({ playerId: id }).sort({ createdAt: -1 }).toArray();
+  const held = await q.codes
+    .find({ _id: { $in: claimRows.flatMap((c) => (c.codeId ? [c.codeId] : [])) } })
+    .toArray();
+  const codeOf = new Map(held.map((c) => [c._id.toHexString(), c]));
+  const playerClaims = claimRows.map((c) => {
+    const code = c.codeId ? codeOf.get(c.codeId.toHexString()) : undefined;
+    return {
+      id: c._id,
+      reward: c.rewardId,
+      code: code?.code ?? null,
+      codeStatus: code?.status ?? null,
+      expiresAt: c.expiresAt,
+      emailStatus: c.emailStatus,
+      src: c.src,
+      createdAt: c.createdAt,
+    };
+  });
+  const playerConsents = await q.consents
+    .find({ playerId: id })
+    .sort({ createdAt: -1, _id: -1 })
+    .toArray();
+  const emailRows = await q.emailOutbox
+    .find({ playerId: id })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .toArray();
+  const emails = emailRows.map((e) => ({
+    id: e._id,
+    kind: e.kind,
+    status: e.status,
+    attempts: e.attempts,
+    lastError: e.lastError,
+    createdAt: e.createdAt,
+    sentAt: e.sentAt,
+  }));
+  const devices = await q.playerTokens.countDocuments({ playerId: id });
   return {
     player,
-    best: best ?? null,
+    best,
     runs: playerRuns,
     claims: playerClaims,
     consents: playerConsents,
     emails,
-    devices: devices?.n ?? 0,
+    devices,
   };
 }
 
@@ -133,11 +121,11 @@ export async function playerDetail(q: Queryable, id: string) {
 export async function exportPlayer(q: Queryable, id: string) {
   const detail = await playerDetail(q, id);
   if (!detail) return null;
-  const { player } = detail;
+  const { player, best } = detail;
   return {
     exportedAt: new Date().toISOString(),
     player: {
-      id: player.id,
+      id: player._id,
       email: player.email,
       nickname: player.nickname,
       language: player.language,
@@ -151,9 +139,18 @@ export async function exportPlayer(q: Queryable, id: string) {
       createdAt: player.createdAt,
       lastSeenAt: player.lastSeenAt,
     },
-    bestRun: detail.best,
+    bestRun: best
+      ? {
+          playerId: best._id,
+          runId: best.runId,
+          garlic: best.garlic,
+          hits: best.hits,
+          distanceM: best.distanceM,
+          achievedAt: best.achievedAt,
+        }
+      : null,
     runs: detail.runs.map((r) => ({
-      id: r.id,
+      id: r._id,
       finishedAt: r.finishedAt,
       status: r.status,
       distanceM: r.distanceM,
@@ -165,7 +162,20 @@ export async function exportPlayer(q: Queryable, id: string) {
       utm: r.utm,
     })),
     claims: detail.claims,
-    consents: detail.consents,
+    consents: detail.consents.map((c) => ({
+      id: c._id.toHexString(),
+      playerId: c.playerId,
+      kind: c.kind,
+      granted: c.granted,
+      text: c.text,
+      textVersion: c.textVersion,
+      language: c.language,
+      source: c.source,
+      ip: c.ip,
+      userAgent: c.userAgent,
+      hostOrigin: c.hostOrigin,
+      createdAt: c.createdAt,
+    })),
     emails: detail.emails,
   };
 }
@@ -173,6 +183,8 @@ export async function exportPlayer(q: Queryable, id: string) {
 /**
  * Removes a player's personal data and leaderboard row (DATA-07, DATA-06), keeping anonymous
  * totals. Null when the player doesn't exist or is already erased.
+ *
+ * This and the retention job (which calls it) are the only places that delete consent rows.
  */
 export async function erasePlayer(
   q: Db,
@@ -180,71 +192,54 @@ export async function erasePlayer(
   now = new Date(),
 ): Promise<{ consentRows: number; devices: number } | null> {
   return q.transaction(async (tx) => {
-    // The consent log refuses deletes unless the transaction says it is a purge.
-    await tx.execute(sql`set local boustan.allow_consent_purge = 'on'`);
-    const [player] = await tx
-      .select({ id: players.id })
-      .from(players)
-      .where(and(eq(players.id, id), isNull(players.deletedAt)))
-      .for("update");
+    // Anonymizing first is also the claim on the player: a claim or unsubscribe running at the
+    // same moment conflicts with this write and starts over, finding the player gone.
+    const player = await tx.players.findOneAndUpdate(
+      { _id: id, deletedAt: null },
+      {
+        $set: {
+          email: `erased-${id}@erased.invalid`,
+          emailNormalized: `erased:${id}`,
+          nickname: null,
+          utm: {},
+          ageConfirmedAt: null,
+          marketingOptIn: false,
+          hidden: false,
+          crmStatus: "skipped",
+          emailBlockedAt: now,
+          emailBlockReason: "erased",
+          deletedAt: now,
+        },
+      },
+      { projection: { _id: 1 } },
+    );
     if (!player) return null;
-    const gone = await tx
-      .delete(consents)
-      .where(eq(consents.playerId, id))
-      .returning({ id: consents.id });
-    const devices = await tx
-      .delete(playerTokens)
-      .where(eq(playerTokens.playerId, id))
-      .returning({ h: playerTokens.tokenHash });
-    await tx.delete(bestRuns).where(eq(bestRuns.playerId, id));
-    await tx
-      .update(crmOutbox)
-      .set({ status: "skipped", lastError: "player erased" })
-      .where(and(eq(crmOutbox.playerId, id), eq(crmOutbox.status, "pending")));
-    await tx
-      .update(emailOutbox)
-      .set({ status: "blocked", lastError: "player erased", leaseUntil: null })
-      .where(
-        and(
-          eq(emailOutbox.playerId, id),
-          inArray(emailOutbox.status, ["pending", "retry", "sending"]),
-        ),
-      );
-    await tx
-      .update(players)
-      .set({
-        email: `erased-${id}@erased.invalid`,
-        emailNormalized: `erased:${id}`,
-        nickname: null,
-        utm: {},
-        ageConfirmedAt: null,
-        marketingOptIn: false,
-        hidden: false,
-        crmStatus: "skipped",
-        emailBlockedAt: now,
-        emailBlockReason: "erased",
-        deletedAt: now,
-      })
-      .where(eq(players.id, id));
-    return { consentRows: gone.length, devices: devices.length };
+    const consents = await tx.consents.deleteMany({ playerId: id });
+    const devices = await tx.playerTokens.deleteMany({ playerId: id });
+    await tx.bestRuns.deleteOne({ _id: id });
+    await tx.crmOutbox.updateMany(
+      { playerId: id, status: "pending" },
+      { $set: { status: "skipped", lastError: "player erased" } },
+    );
+    await tx.emailOutbox.updateMany(
+      { playerId: id, status: { $in: ["pending", "retry", "sending"] } },
+      { $set: { status: "blocked", lastError: "player erased", leaseUntil: null } },
+    );
+    return { consentRows: consents.deletedCount, devices: devices.deletedCount };
   });
 }
 
 /** Queues a re-send of every code a player holds. Null when there is nothing to send. */
 export async function queueCouponResend(q: Db, id: string): Promise<string | null> {
-  const [player] = await q
-    .select()
-    .from(players)
-    .where(and(eq(players.id, id), isNull(players.deletedAt)));
+  const player = await q.players.findOne({ _id: id, deletedAt: null });
   if (!player || player.emailBlockedAt) return null;
-  const owned = await q
-    .select({ id: claims.id })
-    .from(claims)
-    .where(and(eq(claims.playerId, id), isNotNull(claims.codeId)));
+  const owned = await q.claims
+    .find({ playerId: id, codeId: { $ne: null } }, { projection: { _id: 1 } })
+    .toArray();
   return queueResend(
     q,
     id,
-    owned.map((c) => c.id),
+    owned.map((c) => c._id),
     player.language,
     null,
   );
@@ -253,12 +248,8 @@ export async function queueCouponResend(q: Db, id: string): Promise<string | nul
 // ---------- leaderboard moderation (LB-07) ----------
 
 export async function setHidden(q: Queryable, id: string, hidden: boolean): Promise<boolean> {
-  const rows = await q
-    .update(players)
-    .set({ hidden })
-    .where(and(eq(players.id, id), isNull(players.deletedAt)))
-    .returning({ id: players.id });
-  return rows.length > 0;
+  const result = await q.players.updateOne({ _id: id, deletedAt: null }, { $set: { hidden } });
+  return result.matchedCount > 0;
 }
 
 /**
@@ -274,10 +265,9 @@ export async function renamePlayer(
   const typed = requested.normalize("NFC").trim().replace(/\s+/g, " ");
   if (typed !== "" && !isValidNickname(typed)) return null;
   const name = typed === "" ? autoNickname() : typed;
-  const rows = await q
-    .update(players)
-    .set({ nickname: name })
-    .where(and(eq(players.id, id), isNull(players.deletedAt)))
-    .returning({ id: players.id });
-  return rows.length > 0 ? name : null;
+  const result = await q.players.updateOne(
+    { _id: id, deletedAt: null },
+    { $set: { nickname: name } },
+  );
+  return result.matchedCount > 0 ? name : null;
 }

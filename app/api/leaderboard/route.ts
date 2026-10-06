@@ -27,7 +27,7 @@ export const GET = withErrors("leaderboard", async (request: Request) => {
   const player = await findPlayerByToken(db(), ctx.playerToken);
   const [top, me] = await Promise.all([
     cachedTop(db(), size),
-    player ? entryOfPlayer(db(), player.id) : null,
+    player ? entryOfPlayer(db(), player._id) : null,
   ]);
   return json(me ? { top, me } : { top });
 });
