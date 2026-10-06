@@ -1,0 +1,149 @@
+{
+  "comment": "Runs played in Chromium through window.__stc (npm run record:runs). The validator must accept every one (NFR-09, AC-05).",
+  "runs": [
+    {
+      "scenario": "idle",
+      "seed": 3143014649,
+      "distance": 29.294394985000004,
+      "garlic": 1,
+      "hits": 3,
+      "activeMs": 7363
+    },
+    {
+      "scenario": "idle",
+      "seed": 1581081916,
+      "distance": 27.38542056,
+      "garlic": 0,
+      "hits": 3,
+      "activeMs": 6932
+    },
+    {
+      "scenario": "idle",
+      "seed": 1732634857,
+      "distance": 23.742894340000003,
+      "garlic": 0,
+      "hits": 3,
+      "activeMs": 6094
+    },
+    {
+      "scenario": "survive",
+      "seed": 1102933898,
+      "distance": 259.7459038461538,
+      "garlic": 6,
+      "hits": 20,
+      "activeMs": 42003
+    },
+    {
+      "scenario": "survive",
+      "seed": 3325805940,
+      "distance": 260.2574038461538,
+      "garlic": 8,
+      "hits": 17,
+      "activeMs": 42065
+    },
+    {
+      "scenario": "survive",
+      "seed": 3737984714,
+      "distance": 261.39590384615383,
+      "garlic": 7,
+      "hits": 15,
+      "activeMs": 42203
+    },
+    {
+      "scenario": "jumper",
+      "seed": 2237750917,
+      "distance": 234.5009038461538,
+      "garlic": 15,
+      "hits": 4,
+      "activeMs": 38943
+    },
+    {
+      "scenario": "jumper",
+      "seed": 3567273297,
+      "distance": 234.86390384615385,
+      "garlic": 9,
+      "hits": 6,
+      "activeMs": 38987
+    },
+    {
+      "scenario": "jumper",
+      "seed": 416159912,
+      "distance": 232.8179038461538,
+      "garlic": 15,
+      "hits": 4,
+      "activeMs": 38739
+    },
+    {
+      "scenario": "magnet",
+      "seed": 3249605988,
+      "distance": 179.06584314000003,
+      "garlic": 21,
+      "hits": 0,
+      "activeMs": 32066
+    },
+    {
+      "scenario": "magnet",
+      "seed": 879720768,
+      "distance": 181.96613618499998,
+      "garlic": 26,
+      "hits": 0,
+      "activeMs": 32443
+    },
+    {
+      "scenario": "magnet",
+      "seed": 206363559,
+      "distance": 178.03942056,
+      "garlic": 36,
+      "hits": 0,
+      "activeMs": 31932
+    },
+    {
+      "scenario": "magnet_long",
+      "seed": 1549027826,
+      "distance": 600.0254038461537,
+      "garlic": 74,
+      "hits": 0,
+      "activeMs": 83249
+    },
+    {
+      "scenario": "magnet_long",
+      "seed": 580073066,
+      "distance": 601.3206538461538,
+      "garlic": 54,
+      "hits": 0,
+      "activeMs": 83406
+    },
+    {
+      "scenario": "magnet_long",
+      "seed": 3990889606,
+      "distance": 601.1474038461538,
+      "garlic": 70,
+      "hits": 0,
+      "activeMs": 83385
+    },
+    {
+      "scenario": "magnet_hits",
+      "seed": 1865157345,
+      "distance": 301.58990384615385,
+      "garlic": 32,
+      "hits": 23,
+      "activeMs": 47075
+    },
+    {
+      "scenario": "magnet_hits",
+      "seed": 412326666,
+      "distance": 306.37490384615387,
+      "garlic": 29,
+      "hits": 21,
+      "activeMs": 47655
+    },
+    {
+      "scenario": "magnet_hits",
+      "seed": 74306214,
+      "distance": 310.2854038461538,
+      "garlic": 34,
+      "hits": 22,
+      "activeMs": 48129
+    }
+  ]
+}

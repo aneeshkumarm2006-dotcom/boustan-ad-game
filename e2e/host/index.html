@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Test host page</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f4f4f1;
+        --ink: #1d1d1b;
+        --line: #c9c9c2;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1b1b1d;
+          --ink: #ededea;
+          --line: #3b3b3f;
+        }
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        font:
+          15px/1.4 system-ui,
+          sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+      }
+      main {
+        max-width: 960px;
+        margin: 0 auto;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin: 12px 0;
+      }
+      button {
+        min-height: 36px;
+        padding: 0 12px;
+      }
+      #slot {
+        margin: 0 auto;
+      }
+      pre {
+        max-height: 220px;
+        overflow: auto;
+        padding: 8px;
+        border: 1px solid var(--line);
+        font-size: 12px;
+      }
+      .filler {
+        height: 120vh;
+        border-top: 1px dashed var(--line);
+        margin-top: 16px;
+        padding-top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Test host page</h1>
+      <p>
+        Embeds the game from another origin, as a partner site would (PRD NFR-09). Query:
+        <code>game</code> (game origin, default http://localhost:3100), <code>mode</code> (<code
+          >script</code
+        >
+        for embed.js, <code>iframe</code> for the plain snippet), <code>w</code>/<code>h</code>
+        (plain iframe size), <code>lang</code>, <code>src</code>, <code>muted</code>,
+        <code>width</code> (slot width).
+      </p>
+      <div class="controls">
+        <button type="button" data-cmd="setLanguage" data-value="fr">setLanguage fr</button>
+        <button type="button" data-cmd="setLanguage" data-value="en">setLanguage en</button>
+        <button type="button" data-cmd="pause">pause</button>
+        <button type="button" data-cmd="resume">resume</button>
+        <button type="button" data-cmd="mute" data-value="true">mute</button>
+        <button type="button" data-cmd="mute" data-value="false">unmute</button>
+      </div>
+      <div id="slot"></div>
+      <h2>dataLayer</h2>
+      <pre id="log"></pre>
+      <div class="filler">Scroll down to push the game out of view; it should pause.</div>
+    </main>
+    <script>
+      (function () {
+        var q = new URLSearchParams(location.search);
+        var game = (q.get("game") || "http://localhost:3100").replace(/\/$/, "");
+        var slot = document.getElementById("slot");
+        if (q.get("width")) slot.style.maxWidth = q.get("width") + "px";
+        var log = document.getElementById("log");
+        window.dataLayer = window.dataLayer || [];
+        var push = window.dataLayer.push.bind(window.dataLayer);
+        window.dataLayer.push = function (entry) {
+          log.textContent += JSON.stringify(entry) + "\n";
+          return push(entry);
+        };
+
+        var attrs = ["lang", "src", "muted"];
+        if (q.get("mode") === "iframe") {
+          // The plain snippet from PRD §10.1, at a fixed size.
+          var f = document.createElement("iframe");
+          var p = new URLSearchParams();
+          attrs.forEach(function (k) {
+            if (q.get(k)) p.set(k, q.get(k));
+          });
+          f.src = game + "/?" + p;
+          f.title = "Boustan — Sauvez le poulet";
+          f.width = q.get("w") || "100%";
+          f.height = q.get("h") || "600";
+          f.style.cssText = "border:0;display:block;max-width:480px;margin:0 auto";
+          f.allow = "clipboard-write; fullscreen";
+          slot.appendChild(f);
+          window.boustanGame = {
+            send: function (cmd, value) {
+              f.contentWindow.postMessage(
+                { ns: "boustan-game", v: 1, cmd: cmd, value: value },
+                game,
+              );
+            },
+          };
+          window.addEventListener("message", function (e) {
+            if (e.origin === game && e.data && e.data.ns === "boustan-game") {
+              window.dataLayer.push({
+                event: "boustan_game_" + e.data.type,
+                boustan_game: e.data.data,
+              });
+            }
+          });
+        } else {
+          var div = document.createElement("div");
+          div.setAttribute("data-boustan-game", "");
+          attrs.forEach(function (k) {
+            if (q.get(k)) div.setAttribute("data-" + k, q.get(k));
+          });
+          slot.appendChild(div);
+          var s = document.createElement("script");
+          s.src = game + "/embed.js";
+          s.async = true;
+          document.body.appendChild(s);
+        }
+
+        document.querySelectorAll("[data-cmd]").forEach(function (b) {
+          b.addEventListener("click", function () {
+            var v = b.getAttribute("data-value");
+            window.boustanGame &&
+              window.boustanGame.send(
+                b.getAttribute("data-cmd"),
+                v === "true" ? true : v === "false" ? false : v,
+              );
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>

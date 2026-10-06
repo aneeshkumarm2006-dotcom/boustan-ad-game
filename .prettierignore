@@ -1,0 +1,10 @@
+.next
+node_modules
+package-lock.json
+next-env.d.ts
+coverage
+playwright-report
+test-results
+blob-report
+lib/server/data/
+db/migrations/meta/

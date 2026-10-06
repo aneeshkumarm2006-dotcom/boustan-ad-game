@@ -1,0 +1,238 @@
+{
+  "meta": {
+    "gameLabel": "Save the Chicken game. Tap or press Space to jump."
+  },
+  "brand": {
+    "game": "SAVE THE CHICKEN",
+    "titleTop": "SAVE THE",
+    "titleBottom": "CHICKEN",
+    "logoAlt": "Boustan"
+  },
+  "common": {
+    "back": "BACK",
+    "close": "Close",
+    "playAgain": "PLAY AGAIN",
+    "leaderboard": "LEADERBOARD",
+    "myRewards": "MY REWARDS",
+    "copy": "COPY",
+    "copied": "COPIED!",
+    "copyFailed": "COPY FAILED, SORRY",
+    "loading": "Loading…",
+    "retry": "TRY AGAIN",
+    "orderOnline": "ORDER ONLINE",
+    "findBoustan": "FIND MY BOUSTAN",
+    "newTab": "(opens in a new tab)"
+  },
+  "settings": {
+    "language": "Language",
+    "sound": "Sound",
+    "soundOn": "Sound on",
+    "soundOff": "Sound off"
+  },
+  "start": {
+    "kicker": "URGENT",
+    "lede": "It's running for its life. The spit is right behind it.",
+    "play": "RUN, CHICKEN, RUN",
+    "getReady": "GET READY…",
+    "how": "Tap or press Space to jump. Tap again mid-air to double jump. Grab garlic to push the spit back.",
+    "rewardsTitle": "WIN IN ONE RUN",
+    "notStarted": "Rewards start {date}. Warm up now!",
+    "ended": "This promotion has ended. Play for fun!",
+    "claimsOff": "Rewards are paused right now. Play for fun!",
+    "pending": "Your reward is waiting. Claim it within 30 minutes of your run."
+  },
+  "reward": {
+    "free_coke": {
+      "name": "Free Coke",
+      "short": "FREE COKE",
+      "goal": "Reach {m} m",
+      "terms": "One 355 mL soft drink with any purchase at participating locations. One per person. No cash value."
+    },
+    "free_garlic_sauce": {
+      "name": "Free garlic sauce",
+      "short": "FREE GARLIC SAUCE",
+      "goal": "Grab {n} garlic",
+      "terms": "One garlic sauce with any purchase at participating locations. One per person. No cash value."
+    },
+    "allGone": "All gone for now",
+    "unlocked": "UNLOCKED!",
+    "claimed": "CLAIMED",
+    "needsConnection": "Needs a connection"
+  },
+  "hud": {
+    "spit": "SPIT",
+    "hot": "HOT!",
+    "pause": "Pause",
+    "hint": "Tap to jump · tap again mid-air to double jump"
+  },
+  "canvas": {
+    "run": "RUN!",
+    "garlicPlus": "+GARLIC",
+    "hits": ["OUCH", "BAWK!", "NOOO", "YIKES"]
+  },
+  "pause": {
+    "title": "PAUSED",
+    "resume": "RESUME",
+    "hint": "Tap anywhere to resume"
+  },
+  "milestone": {
+    "m25": "25 M · NOT BAD",
+    "m50": "50 M · HALFWAY TO A FREE COKE",
+    "m50NoReward": "50 M · HALFWAY THERE",
+    "m75": "75 M · ALMOST THERE",
+    "m100": "100 M!",
+    "every": [
+      "{m} M · LEGENDARY",
+      "{m} M · TELL YOUR FRIENDS",
+      "{m} M · ARE YOU OK?",
+      "{m} M · THE CHICKEN BELIEVES"
+    ]
+  },
+  "unlock": {
+    "coke": "FREE COKE UNLOCKED!",
+    "garlic": "FREE GARLIC SAUCE UNLOCKED!",
+    "distance": "{m} M REACHED!",
+    "garlicCount": "{n} GARLIC!"
+  },
+  "results": {
+    "title": "REST IN PITA",
+    "death": {
+      "pickle": "Taken out by a pickle jar. Embarrassing.",
+      "pita": "Tripped over a stack of pitas. Ironic.",
+      "sauce": "Ran straight into the hot sauce.",
+      "potato": "Hit by a flying garlic potato.",
+      "falafel": "Flattened by a rolling falafel.",
+      "creep": "The spit was right behind it the whole time."
+    },
+    "distance": "DISTANCE",
+    "garlic": "GARLIC",
+    "hits": "HITS",
+    "best": "BEST",
+    "bestLine": "Best: {distance} m · garlic {garlic} · hits {hits}",
+    "newBest": "NEW BEST!",
+    "checking": "Checking your run…",
+    "invalid": "We couldn't verify this run.",
+    "offline": "Rewards need a connection. Your score is saved on this device.",
+    "unlockedTitle": "YOU UNLOCKED",
+    "nothingUnlocked": "Reach {m} m or grab {n} garlic in one run to win.",
+    "claimMany": "CLAIM MY REWARDS",
+    "saveScore": "SAVE MY SCORE",
+    "share": "CHALLENGE A FRIEND",
+    "rankPreview": "Projected rank: #{rank}",
+    "scoreSaved": "Score saved! Rank: #{rank}",
+    "claimWindow": "Claim within 30 minutes."
+  },
+  "share": {
+    "title": "Save the Chicken",
+    "text": {
+      "one": "I ran {distance} m and grabbed {garlic} garlic in Save the Chicken. Can you beat that?",
+      "other": "I ran {distance} m and grabbed {garlic} garlic in Save the Chicken. Can you beat that?"
+    },
+    "copied": "COPIED! SEND IT TO A FRIEND"
+  },
+  "claim": {
+    "titleOne": "CLAIM YOUR REWARD",
+    "titleMany": "CLAIM YOUR REWARDS",
+    "titleSave": "SAVE YOUR SCORE",
+    "cta": "CLAIM MY REWARD",
+    "ctaMany": "CLAIM MY REWARDS",
+    "ctaSave": "SAVE MY SCORE",
+    "email": "Your email",
+    "emailHint": "We'll send your code here.",
+    "emailHintSave": "We only use it for the leaderboard.",
+    "nickname": "Nickname (optional)",
+    "nicknameHint": "2–16 characters. Shown on the leaderboard. Blank gets you a food name.",
+    "reroll": "🎲 New name",
+    "privacy": "Boustan uses your email to send your code and show your score, and sends offers only if you opt in. Your data may be processed outside Quebec. It is deleted 90 days after the campaign unless you opt in. <policy>Privacy policy</policy> · <officer>Privacy officer</officer>",
+    "sending": "SENDING…",
+    "recognized": "Send to {email}?",
+    "notYou": "Not you?",
+    "oneTap": "YES, SEND MY CODE",
+    "oneTapMany": "YES, SEND MY CODES",
+    "oneTapSave": "YES, SAVE IT",
+    "errors": {
+      "email": "Enter a valid email address.",
+      "terms": "Confirm you're 14 or older and accept the terms.",
+      "nickname": "Use 2–16 letters, numbers, spaces or - _ . '",
+      "nicknameRude": "Pick a different nickname. This one can't go on the leaderboard.",
+      "network": "Something went wrong. Your reward is safe, so try again.",
+      "expired": "This reward has expired. Rewards can be claimed for 30 minutes after a run.",
+      "rejected": "We couldn't process this request.",
+      "badEmail": "Use a permanent email address. Temporary inboxes can't receive rewards.",
+      "notRecognized": "We couldn't find your saved email. Enter it again.",
+      "tooMany": "Too many tries. Wait a little, then try again."
+    }
+  },
+  "consent": {
+    "version": "en-2026-10-06-draft",
+    "terms": "I'm 14 or older and I accept the <terms>offer terms</terms> and the <privacy>privacy policy</privacy>.",
+    "marketing": "Send me Boustan offers and news by email. Unsubscribe anytime.",
+    "withdrawn": "Unsubscribed from Boustan offers and news by email."
+  },
+  "coupon": {
+    "title": "YOUR CODE",
+    "titleMany": "YOUR CODES",
+    "expires": "Expires {date}",
+    "howTo": "Show this code at the counter or enter it in the Boustan app.",
+    "fullTerms": "Full terms",
+    "sentTo": "Also sent to {email}",
+    "alreadyClaimed": "Already claimed: we've re-sent your code.",
+    "resend": "RESEND EMAIL",
+    "resent": "EMAIL SENT",
+    "copyLabel": "Copy code for {reward}",
+    "titleNone": "ALL GONE FOR NOW",
+    "unavailable": "{reward}: all gone for now."
+  },
+  "lb": {
+    "title": "LEADERBOARD",
+    "rank": "#",
+    "name": "NAME",
+    "garlic": "GARLIC",
+    "hits": "HITS",
+    "distance": "DIST.",
+    "flawless": "FLAWLESS",
+    "you": "You: #{rank}",
+    "youRow": "YOU",
+    "empty": "No scores yet.",
+    "error": "The leaderboard isn't available right now.",
+    "caption": "Ranked by garlic, then fewest hits, then distance."
+  },
+  "myRewards": {
+    "title": "MY REWARDS",
+    "empty": "No rewards yet."
+  },
+  "gate": {
+    "tooSmall": "This space is too small to play.",
+    "fullScreen": "PLAY FULL SCREEN"
+  },
+  "email": {
+    "subject": {
+      "free_coke": "Your free Coke is waiting",
+      "free_garlic_sauce": "Your free garlic sauce is waiting",
+      "both": "Your free Coke and garlic sauce are waiting"
+    },
+    "preview": "Your Boustan code is inside. Show it at the counter or enter it in the app.",
+    "heading": "You saved the chicken!",
+    "intro": "Here's your reward. Show the code at the counter or enter it in the Boustan app.",
+    "introMany": "Here are your rewards. Show each code at the counter or enter it in the Boustan app.",
+    "resent": "As requested, here are your codes again.",
+    "code": "Code",
+    "expires": "Expires {date}",
+    "howToTitle": "How to redeem",
+    "findBoustan": "Find my Boustan",
+    "orderOnline": "Order online",
+    "playAgain": "Play again",
+    "otherLanguage": "Version française",
+    "footer": "You're getting this email because you claimed a reward in Save the Chicken.",
+    "privacy": "Privacy policy",
+    "unsubscribe": "Unsubscribe from offers",
+    "contact": "Contact: {email}",
+    "viewInvalid": "This link isn't valid."
+  },
+  "unsubscribe": {
+    "title": "You're unsubscribed",
+    "body": "You won't get Boustan offers and news by email anymore. Your reward codes still work.",
+    "invalid": "This unsubscribe link isn't valid. Write to us and we'll take care of it.",
+    "play": "Back to the game"
+  }
+}

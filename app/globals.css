@@ -1,0 +1,934 @@
+/*
+ * Game page styles. Night scene from the reference, Boustan palette on the UI (PRD GAME-12):
+ * red #E1251B, cream #F3EFEA, dark green #073F36, charcoal #252525. The palette is a
+ * placeholder until Boustan's brand kit arrives; change the --brand-* tokens only.
+ */
+
+:root {
+  --brand-red: #e1251b;
+  --brand-cream: #f3efea;
+  --brand-green: #073f36;
+  --brand-charcoal: #252525;
+
+  --bg: #0e0b1e;
+  --panel: var(--brand-green);
+  --panel-line: #0f5a4c;
+  --ink: var(--brand-cream);
+  --muted: #c4d4ce;
+  --gold: #ffc93c;
+  --meter-low: #4cd07d;
+  --meter-mid: #ffc93c;
+  --meter-high: #ff3b3b;
+  --focus: #ffc93c;
+
+  --pixel: var(--font-pixel), ui-monospace, monospace;
+  --mono: var(--font-mono), ui-monospace, monospace;
+  --ar: 1.7778;
+  --pad: 8px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--mono);
+  font-size: 20px;
+  line-height: 1.15;
+  overflow: hidden;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  background:
+    radial-gradient(1200px 500px at 50% 110%, rgba(255, 122, 26, 0.1), transparent 60%),
+    radial-gradient(900px 400px at 50% -10%, rgba(225, 37, 27, 0.08), transparent 60%), var(--bg);
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--gold);
+}
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ---------- stage: header, game frame, footer ---------- */
+
+.app {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--pad);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.stage {
+  /* Fits the viewport height in standalone and fixed-height iframes. */
+  width: min(100%, 960px, calc((100vh - var(--chrome, 84px)) * var(--ar)));
+  width: min(100%, 960px, calc((100dvh - var(--chrome, 84px)) * var(--ar)));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.bar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bar-title {
+  font-family: var(--pixel);
+  font-size: clamp(7px, 1.6vw, 12px);
+  letter-spacing: 1px;
+  text-shadow: 2px 2px 0 var(--brand-red);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: clamp(15px, 2.4vw, 19px);
+  text-align: center;
+}
+
+.frame {
+  position: relative;
+  width: 100%;
+  aspect-ratio: var(--ar);
+  border: 2px solid var(--panel-line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #000;
+  box-shadow:
+    0 0 0 3px #000,
+    0 24px 70px rgba(0, 0, 0, 0.65);
+  -webkit-touch-callout: none;
+  outline: none;
+}
+
+.frame::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.1) 0 1px, transparent 1px 3px);
+}
+
+/* EMB-08: block touch scrolling only over the game, and only during a run. */
+.frame[data-running="true"] {
+  touch-action: none;
+}
+
+.frame canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+@media (orientation: landscape) and (max-height: 500px) {
+  .app {
+    --pad: 4px;
+  }
+  .stage {
+    gap: 4px;
+  }
+  .stage > .hint {
+    display: none;
+  }
+}
+
+/* ---------- HUD ---------- */
+
+.hud {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 6px 0 8px;
+  font-family: var(--pixel);
+  font-size: clamp(7px, 1.4vw, 12px);
+  line-height: 1.3;
+  text-shadow: 2px 2px 0 #000;
+  pointer-events: none;
+}
+
+.hud-left,
+.hud-right {
+  display: flex;
+  align-items: center;
+  gap: clamp(6px, 1.6vw, 14px);
+}
+
+.spit {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.spit .hot-label {
+  display: none;
+  color: var(--meter-high);
+}
+
+/* The engine sets data-level on .spit; the label changes too, so heat isn't shown by colour alone. */
+.spit[data-level="high"] .spit-label {
+  display: none;
+}
+
+.spit[data-level="high"] .hot-label {
+  display: inline;
+}
+
+.meter {
+  width: clamp(36px, 11vw, 100px);
+  height: clamp(7px, 1.1vw, 11px);
+  border: 2px solid #000;
+  background: #2a2150;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
+}
+
+.meter i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--meter-low);
+}
+
+.spit[data-level="mid"] .meter i {
+  background: var(--meter-mid);
+}
+
+.spit[data-level="high"] .meter i {
+  background: var(--meter-high);
+  animation: pulse 0.35s steps(2) infinite;
+}
+
+.goal {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.goal svg {
+  width: clamp(8px, 1.6vw, 14px);
+  height: auto;
+  flex-shrink: 0;
+}
+
+.goal .check {
+  display: none;
+  color: var(--meter-low);
+}
+
+.goal[data-done="true"] .check {
+  display: inline-block;
+}
+
+.goal-bar {
+  width: clamp(28px, 8vw, 70px);
+  height: clamp(5px, 0.9vw, 8px);
+  border: 2px solid #000;
+  background: #2a2150;
+}
+
+.goal-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--gold);
+}
+
+.goal[data-done="true"] .goal-bar i {
+  background: var(--meter-low);
+}
+
+.hud-pause {
+  pointer-events: auto;
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 2px solid #000;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+/* 44 × 44 px touch target around the small visible button (NFR-05). */
+.hud-pause::before {
+  content: "";
+  position: absolute;
+  inset: -11px -9px;
+}
+
+.hud-pause svg {
+  width: 10px;
+  height: 10px;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ---------- paused, too small ---------- */
+
+.paused {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 10px;
+  text-align: center;
+}
+
+.paused h2 {
+  font-family: var(--pixel);
+  font-size: clamp(14px, 4vw, 24px);
+  text-shadow:
+    3px 3px 0 var(--brand-red),
+    5px 5px 0 #000;
+}
+
+.paused p {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+/* ---------- overlays and cards ---------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  overflow-y: auto;
+  padding: 10px;
+  background: rgba(8, 6, 20, 0.62);
+}
+
+.card {
+  position: relative;
+  /* margin: auto centres the card and still scrolls from the top when it's taller. */
+  margin: auto;
+  width: min(440px, 100%);
+  background: var(--panel);
+  border: 2px solid #000;
+  box-shadow: 6px 6px 0 #000;
+  padding: 14px 16px 16px;
+  text-align: center;
+  animation: pop 0.28s steps(4) both;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.card > * + * {
+  margin-top: 12px;
+}
+
+@keyframes pop {
+  from {
+    transform: scale(0.85);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.card-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-bar .bar-tools {
+  margin-left: auto;
+}
+
+.kicker {
+  font-family: var(--pixel);
+  font-size: 10px;
+  color: var(--gold);
+  letter-spacing: 2px;
+}
+
+.kicker::before {
+  content: "● ";
+  animation: blink 1s steps(2) infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+h1,
+h2,
+h3 {
+  font-weight: normal;
+  overflow-wrap: anywhere;
+}
+
+.title {
+  font-family: var(--pixel);
+  font-size: clamp(20px, 6.4vw, 34px);
+  line-height: 1.3;
+  text-shadow:
+    3px 3px 0 var(--brand-red),
+    6px 6px 0 #000;
+}
+
+.heading {
+  font-family: var(--pixel);
+  font-size: clamp(14px, 4.6vw, 22px);
+  line-height: 1.35;
+  text-shadow:
+    3px 3px 0 var(--brand-red),
+    5px 5px 0 #000;
+}
+
+.lede,
+.sub {
+  color: var(--muted);
+  font-size: 21px;
+}
+
+.small {
+  color: var(--muted);
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.note {
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.note.ok {
+  color: var(--meter-low);
+}
+
+.note.warn {
+  color: var(--gold);
+}
+
+.error {
+  color: #ffb4ae;
+  font-size: 18px;
+}
+
+/* ---------- buttons, toggles, links ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  font-family: var(--pixel);
+  font-size: 11px;
+  line-height: 1.4;
+  text-align: center;
+  text-decoration: none;
+  color: var(--brand-charcoal);
+  background: var(--brand-cream);
+  border: 2px solid #000;
+  box-shadow: 0 4px 0 #000;
+  padding: 10px 12px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.btn:hover {
+  filter: brightness(1.08);
+}
+
+.btn:active {
+  transform: translateY(3px);
+  box-shadow: 0 1px 0 #000;
+}
+
+.btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+  transform: none;
+  box-shadow: 0 4px 0 #000;
+}
+
+.btn.primary {
+  background: var(--brand-red);
+  color: #fff;
+}
+
+.btn.ghost {
+  background: transparent;
+  color: var(--ink);
+  border-color: var(--brand-cream);
+  box-shadow: none;
+}
+
+.btn.big {
+  width: 100%;
+  font-size: 12px;
+  padding: 14px;
+}
+
+.btn-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.btn-stack {
+  display: grid;
+  gap: 10px;
+}
+
+.linkish {
+  background: none;
+  border: 0;
+  color: var(--gold);
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 18px;
+  min-height: 44px;
+  padding: 0 4px;
+}
+
+.toggle {
+  display: inline-flex;
+  border: 2px solid #000;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.toggle button,
+.icon-btn {
+  min-width: 44px;
+  min-height: 32px;
+  font-family: var(--pixel);
+  font-size: 9px;
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+
+.toggle button[aria-pressed="true"] {
+  background: var(--brand-cream);
+  color: var(--brand-charcoal);
+}
+
+.icon-btn {
+  border: 2px solid #000;
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--ink);
+}
+
+.icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ---------- logo and reward cards ---------- */
+
+.logo {
+  display: inline-block;
+  height: 30px;
+  width: auto;
+}
+
+.logo-sm {
+  height: 22px;
+}
+
+.rewards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.reward {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--brand-cream);
+  color: var(--brand-charcoal);
+  border: 2px solid #000;
+  box-shadow: 3px 3px 0 #000;
+  text-align: left;
+  overflow: hidden;
+}
+
+.reward svg {
+  width: 30px;
+  height: auto;
+  flex-shrink: 0;
+  padding: 4px;
+  background: var(--brand-charcoal);
+  border: 2px solid #000;
+}
+
+.reward-goal {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.reward-name {
+  font-family: var(--pixel);
+  font-size: 9px;
+  line-height: 1.4;
+  color: #b01d15;
+  overflow-wrap: anywhere;
+}
+
+.reward-status {
+  font-family: var(--pixel);
+  font-size: 8px;
+  margin-top: 2px;
+}
+
+.reward[data-status="gone"] {
+  background: #d9d3cb;
+}
+
+.reward[data-status="gone"] .reward-status {
+  color: #9e1a12;
+}
+
+.reward[data-status="unlocked"] .reward-status {
+  color: #11643a;
+}
+
+.campaign-note {
+  padding: 10px;
+  border: 2px dashed rgba(255, 201, 60, 0.6);
+  background: rgba(255, 201, 60, 0.07);
+  color: var(--ink);
+  font-size: 19px;
+}
+
+/* ---------- results ---------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.stat {
+  padding: 6px 4px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 2px solid #000;
+}
+
+.stat b {
+  display: block;
+  font-family: var(--pixel);
+  font-weight: normal;
+  font-size: clamp(13px, 4vw, 20px);
+  color: var(--gold);
+  text-shadow: 2px 2px 0 #000;
+  margin-bottom: 4px;
+}
+
+.stat span {
+  font-family: var(--pixel);
+  font-size: 8px;
+  color: var(--muted);
+}
+
+.badge {
+  display: inline-block;
+  font-family: var(--pixel);
+  font-size: 8px;
+  color: #06210f;
+  background: var(--meter-low);
+  padding: 3px 5px;
+  white-space: nowrap;
+}
+
+.mini-board {
+  list-style: none;
+  text-align: left;
+  font-size: 18px;
+}
+
+.mini-board li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--panel-line);
+}
+
+/* ---------- forms ---------- */
+
+form {
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+
+.field {
+  display: grid;
+  gap: 4px;
+}
+
+.field label {
+  font-family: var(--pixel);
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.field input {
+  width: 100%;
+  min-height: 44px;
+  font-family: var(--mono);
+  font-size: 22px;
+  color: var(--ink);
+  background: var(--bg);
+  border: 2px solid var(--brand-cream);
+  padding: 6px 9px;
+}
+
+.field input[aria-invalid="true"] {
+  border-color: #ff8a80;
+}
+
+.check-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 18px;
+  line-height: 1.2;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.check-row input {
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  flex-shrink: 0;
+  accent-color: var(--brand-red);
+}
+
+.privacy {
+  font-size: 16px;
+  line-height: 1.2;
+  color: var(--muted);
+}
+
+/* ---------- coupon ---------- */
+
+.coupon {
+  padding: 12px;
+  background: var(--brand-cream);
+  color: var(--brand-charcoal);
+  border: 2px dashed var(--brand-charcoal);
+  box-shadow: 4px 4px 0 #000;
+  text-align: center;
+}
+
+.coupon > * + * {
+  margin-top: 8px;
+}
+
+.coupon h3 {
+  font-family: var(--pixel);
+  font-size: 11px;
+  line-height: 1.4;
+  color: #b01d15;
+}
+
+.code {
+  display: block;
+  font-family: var(--mono);
+  font-size: clamp(28px, 9vw, 38px);
+  letter-spacing: 2px;
+  color: var(--brand-charcoal);
+  -webkit-user-select: all;
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
+.coupon .btn {
+  font-size: 10px;
+  min-height: 40px;
+}
+
+.coupon a {
+  color: #8a1710;
+}
+
+/* ---------- leaderboard ---------- */
+
+.board {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 18px;
+}
+
+.board caption {
+  caption-side: bottom;
+  padding-top: 8px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.board th {
+  font-family: var(--pixel);
+  font-weight: normal;
+  font-size: 8px;
+  color: var(--muted);
+  padding: 4px 3px;
+  text-align: right;
+}
+
+.board td {
+  padding: 4px 3px;
+  text-align: right;
+  border-top: 1px dashed var(--panel-line);
+}
+
+.board th:nth-child(2),
+.board td:nth-child(2) {
+  text-align: left;
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.board tr.me td {
+  background: rgba(255, 201, 60, 0.15);
+  color: var(--gold);
+}
+
+.board .badge {
+  margin-left: 4px;
+  vertical-align: 2px;
+}
+
+/* ---------- toast, live region ---------- */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 20;
+  max-width: calc(100% - 24px);
+  font-family: var(--pixel);
+  font-size: 10px;
+  line-height: 1.4;
+  text-align: center;
+  background: var(--meter-low);
+  color: #06210f;
+  border: 2px solid #000;
+  box-shadow: 0 4px 0 #000;
+  padding: 10px 12px;
+}
+
+@media (max-width: 360px) {
+  .card {
+    padding: 12px 10px 14px;
+  }
+  .btn-row,
+  .rewards {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Nickname field with its reroll button (LB-05). */
+.input-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.input-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.small-btn {
+  font-size: 9px;
+  padding: 6px 8px;
+  flex: none;
+}

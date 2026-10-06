@@ -1,0 +1,10 @@
+{
+  "comment": "levelDigest(seed, 500) per seed. Unit and browser tests both check these (NFR-09). If a tuning change alters them on purpose, bump TUNING.version and update this file.",
+  "distanceM": 500,
+  "digests": {
+    "1": "106:631f8841",
+    "12345": "117:71345414",
+    "4294967295": "137:0d516e1a",
+    "2024101500": "100:0d859c48"
+  }
+}
