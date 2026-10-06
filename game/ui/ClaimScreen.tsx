@@ -6,7 +6,7 @@ import { looksLikeEmail } from "@/lib/email";
 import { NICKNAME_MAX, autoNickname, nicknameProblem, type NicknameProblem } from "@/lib/nicknames";
 import type { SavedPlayer } from "@/lib/player";
 import { useUi } from "./context";
-import { Overlay, RewardCard, RichText, Tools } from "./parts";
+import { BackArrow, DiceIcon, Overlay, RewardCard, RichText, Tools } from "./parts";
 import { TURNSTILE_ENABLED, useTurnstile } from "./turnstile";
 
 export interface ClaimInput {
@@ -114,7 +114,7 @@ export function ClaimScreen({
     <Overlay labelledBy={`${id}-title`} focusKey={oneTap ? "tap" : "form"}>
       <div className="card-bar">
         <button type="button" className="linkish" onClick={onBack}>
-          ← {t.t("common.back")}
+          <BackArrow /> {t.t("common.back")}
         </button>
         <Tools />
       </div>
@@ -200,6 +200,7 @@ export function ClaimScreen({
                   setErrors((e) => ({ ...e, nickname: undefined }));
                 }}
               >
+                <DiceIcon />
                 {t.t("claim.reroll")}
               </button>
             </div>

@@ -20,7 +20,7 @@ export function LoginForm() {
         />
         <small>We email you a sign-in link, valid for 15 minutes.</small>
       </div>
-      <button type="submit" className="adm-btn" disabled={pending}>
+      <button type="submit" className="adm-btn main" disabled={pending}>
         {pending ? "Sending…" : "Email me a sign-in link"}
       </button>
       {state?.status === "invalid" && (

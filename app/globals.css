@@ -1,31 +1,61 @@
 /*
- * Game page styles. Night scene from the reference, Boustan palette on the UI (PRD GAME-12):
- * red #E1251B, cream #F3EFEA, dark green #073F36, charcoal #252525. The palette is a
- * placeholder until Boustan's brand kit arrives; change the --brand-* tokens only.
+ * Game page styles, on the Boustan brand (Guide de style v1.1, automne 2025).
+ *
+ * Colours: the guide's palette and nothing else. Vert Boustan and Toum are the main colours and
+ * the preferred text colours. Navet is the one accent. The five secondary colours are used with
+ * restraint, one per component, never as decoration. Tints are blends of palette colours.
+ * Mirrors PALETTE in lib/brand.ts; change both together.
+ *
+ * Type: three roles, set on <html> by app/layout.tsx (see app/fonts.ts).
+ *   display   (Ergon in the guide):  titles. Sentence case, never all caps.
+ *   condensed (Marr Sans Condensed): labels, buttons, kickers. ALWAYS upper case.
+ *   body      (Suisse):              running text. Never all caps.
+ *
+ * Contrast (WCAG 2.1 AA, NFR-05: 4.5:1 for text, 3:1 for large text and graphics):
+ *   Vert on Toum 10.2   Vert on Avocat 10.2   Vert on Hummus 7.1   Vert on Poivron 4.6
+ *   Toum on Navet 3.35  Vert on Navet 3.05    Toum on Tomate 3.6   Vert on Laitue 4.45
+ * so small text sits on Toum, Vert, Avocat or Hummus, and Navet carries only large text
+ * (24px and up), borders, icons and the focus ring.
  */
 
 :root {
-  --brand-red: #e1251b;
-  --brand-cream: #f3efea;
-  --brand-green: #073f36;
-  --brand-charcoal: #252525;
+  --vert: #073f36;
+  --toum: #f4eedf;
+  --navet: #ed2b9a;
+  --hummus: #eec088;
+  --poivron: #f48431;
+  --tomate: #e2412b;
+  --avocat: #eaf864;
+  --laitue: #39b54a;
 
-  --bg: #0e0b1e;
-  --panel: var(--brand-green);
-  --panel-line: #0f5a4c;
-  --ink: var(--brand-cream);
-  --muted: #c4d4ce;
-  --gold: #ffc93c;
-  --meter-low: #4cd07d;
-  --meter-mid: #ffc93c;
-  --meter-high: #ff3b3b;
-  --focus: #ffc93c;
+  --bg: var(--vert);
+  --ink: var(--toum);
+  --accent: var(--navet);
+  --focus: var(--navet);
+  /* Guide, "Montage produits": shadows are hard, the same shape, straight down, 60% black. */
+  --shadow: rgba(0, 0, 0, 0.6);
+  --line: color-mix(in srgb, var(--vert) 24%, var(--toum));
+  --muted: color-mix(in srgb, var(--toum) 82%, var(--vert));
+  --muted-ink: color-mix(in srgb, var(--vert) 80%, var(--toum));
+  /* Spit heat: Laitue, Poivron, Tomate. The label also changes at "high" (never colour alone). */
+  --meter-low: var(--laitue);
+  --meter-mid: var(--poivron);
+  --meter-high: var(--tomate);
 
-  --pixel: var(--font-pixel), ui-monospace, monospace;
-  --mono: var(--font-mono), ui-monospace, monospace;
+  --f-display: var(--font-display), Georgia, "Times New Roman", serif;
+  --f-cond: var(--font-condensed), "Arial Narrow", Arial, sans-serif;
+  --f-body: var(--font-body), "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+  /* Étincelle: the four-point star. Used as a mask (currentColor) and as the card border. */
+  --sparkle: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 0C12 10 14 12 24 12 14 12 12 14 12 24 12 14 10 12 0 12 10 12 12 10 12 0Z'/%3E%3C/svg%3E");
+  --sparkle-navet: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23ED2B9A' d='M12 0C12 10 14 12 24 12 14 12 12 14 12 24 12 14 10 12 0 12 10 12 12 10 12 0Z'/%3E%3C/svg%3E");
+
   --ar: 1.7778;
   --pad: 8px;
-  color-scheme: dark;
+  /* What a toggle or icon button draws with and on, set per surface below. */
+  --on: var(--toum);
+  --off: var(--vert);
+  color-scheme: light;
 }
 
 * {
@@ -42,15 +72,16 @@ body {
 }
 
 body {
-  font-family: var(--mono);
-  font-size: 20px;
-  line-height: 1.15;
+  font-family: var(--f-body);
+  font-size: 18px;
+  line-height: 1.4;
   overflow: hidden;
   -webkit-tap-highlight-color: transparent;
   touch-action: manipulation;
-  background:
-    radial-gradient(1200px 500px at 50% 110%, rgba(255, 122, 26, 0.1), transparent 60%),
-    radial-gradient(900px 400px at 50% -10%, rgba(225, 37, 27, 0.08), transparent 60%), var(--bg);
+  /* Only the weights the fonts ship: never a faux bold or italic. */
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 button,
@@ -60,12 +91,13 @@ input {
 }
 
 a {
-  color: var(--gold);
+  color: inherit;
+  text-underline-offset: 0.18em;
 }
 
 :focus-visible {
   outline: 3px solid var(--focus);
-  outline-offset: 2px;
+  outline-offset: 3px;
 }
 
 .sr-only {
@@ -79,6 +111,20 @@ a {
 
 .hidden {
   display: none !important;
+}
+
+/* The brand star, as a bullet: <span class="sparkle"> or a ::before using the same mask. */
+.sparkle,
+.kicker::before,
+.bar-title::before {
+  content: "";
+  display: inline-block;
+  width: 0.95em;
+  height: 0.95em;
+  flex-shrink: 0;
+  background: currentColor;
+  -webkit-mask: var(--sparkle) center / contain no-repeat;
+  mask: var(--sparkle) center / contain no-repeat;
 }
 
 /* ---------- stage: header, game frame, footer ---------- */
@@ -99,7 +145,7 @@ a {
   width: min(100%, 960px, calc((100dvh - var(--chrome, 84px)) * var(--ar)));
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .bar {
@@ -107,24 +153,28 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  min-height: 32px;
+  min-height: 36px;
 }
 
 .bar-brand {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
 }
 
 .bar-title {
-  font-family: var(--pixel);
-  font-size: clamp(7px, 1.6vw, 12px);
-  letter-spacing: 1px;
-  text-shadow: 2px 2px 0 var(--brand-red);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--f-cond);
+  font-size: clamp(12px, 2.2vw, 15px);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--muted);
 }
 
 .bar-tools {
@@ -136,7 +186,7 @@ a {
 
 .hint {
   color: var(--muted);
-  font-size: clamp(15px, 2.4vw, 19px);
+  font-size: clamp(14px, 2.2vw, 16px);
   text-align: center;
 }
 
@@ -144,23 +194,13 @@ a {
   position: relative;
   width: 100%;
   aspect-ratio: var(--ar);
-  border: 2px solid var(--panel-line);
-  border-radius: 6px;
+  border-radius: 0;
   overflow: hidden;
-  background: #000;
-  box-shadow:
-    0 0 0 3px #000,
-    0 24px 70px rgba(0, 0, 0, 0.65);
+  background: var(--vert);
+  /* The guide's "cadre": a plain square frame, in the accent colour. Outside the box so the
+     canvas keeps its exact ratio. */
+  outline: 4px solid var(--navet);
   -webkit-touch-callout: none;
-  outline: none;
-}
-
-.frame::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, 0.1) 0 1px, transparent 1px 3px);
 }
 
 /* EMB-08: block touch scrolling only over the game, and only during a run. */
@@ -172,16 +212,14 @@ a {
   display: block;
   width: 100%;
   height: 100%;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
 }
 
 @media (orientation: landscape) and (max-height: 500px) {
   .app {
-    --pad: 4px;
+    --pad: 6px;
   }
   .stage {
-    gap: 4px;
+    gap: 6px;
   }
   .stage > .hint {
     display: none;
@@ -198,11 +236,13 @@ a {
   justify-content: space-between;
   align-items: flex-start;
   gap: 6px;
-  padding: 6px 6px 0 8px;
-  font-family: var(--pixel);
-  font-size: clamp(7px, 1.4vw, 12px);
-  line-height: 1.3;
-  text-shadow: 2px 2px 0 #000;
+  padding: 0;
+  font-family: var(--f-cond);
+  font-size: clamp(11px, 2vw, 17px);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  color: var(--toum);
   pointer-events: none;
 }
 
@@ -211,17 +251,22 @@ a {
   display: flex;
   align-items: center;
   gap: clamp(6px, 1.6vw, 14px);
+  padding: clamp(4px, 0.8vw, 8px) clamp(6px, 1.2vw, 12px);
+  background: color-mix(in srgb, var(--vert) 88%, transparent);
 }
 
 .spit {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
 }
 
 .spit .hot-label {
   display: none;
-  color: var(--meter-high);
+  /* Tomate on Vert is only 2.6:1, so the hot label reads as a Toum chip on a Tomate block. */
+  background: var(--tomate);
+  color: var(--toum);
+  padding: 0 5px;
 }
 
 /* The engine sets data-level on .spit; the label changes too, so heat isn't shown by colour alone. */
@@ -234,11 +279,10 @@ a {
 }
 
 .meter {
-  width: clamp(36px, 11vw, 100px);
-  height: clamp(7px, 1.1vw, 11px);
-  border: 2px solid #000;
-  background: #2a2150;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
+  width: clamp(40px, 11vw, 110px);
+  height: clamp(8px, 1.3vw, 13px);
+  border: 2px solid var(--toum);
+  background: transparent;
 }
 
 .meter i {
@@ -254,24 +298,24 @@ a {
 
 .spit[data-level="high"] .meter i {
   background: var(--meter-high);
-  animation: pulse 0.35s steps(2) infinite;
+  animation: pulse 0.4s ease-in-out infinite;
 }
 
 .goal {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
 }
 
 .goal svg {
-  width: clamp(8px, 1.6vw, 14px);
+  width: clamp(12px, 2.2vw, 20px);
   height: auto;
   flex-shrink: 0;
 }
 
 .goal .check {
   display: none;
-  color: var(--meter-low);
+  color: var(--avocat);
 }
 
 .goal[data-done="true"] .check {
@@ -279,21 +323,21 @@ a {
 }
 
 .goal-bar {
-  width: clamp(28px, 8vw, 70px);
-  height: clamp(5px, 0.9vw, 8px);
-  border: 2px solid #000;
-  background: #2a2150;
+  width: clamp(28px, 8vw, 72px);
+  height: clamp(6px, 1vw, 10px);
+  border: 2px solid var(--toum);
+  background: transparent;
 }
 
 .goal-bar i {
   display: block;
   height: 100%;
   width: 0;
-  background: var(--gold);
+  background: var(--toum);
 }
 
 .goal[data-done="true"] .goal-bar i {
-  background: var(--meter-low);
+  background: var(--avocat);
 }
 
 .hud-pause {
@@ -301,11 +345,12 @@ a {
   position: relative;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 22px;
-  background: rgba(0, 0, 0, 0.45);
-  border: 2px solid #000;
-  color: var(--ink);
+  width: clamp(24px, 3.6vw, 32px);
+  height: clamp(22px, 3.2vw, 28px);
+  background: transparent;
+  border: 2px solid var(--toum);
+  border-radius: 0;
+  color: var(--toum);
   cursor: pointer;
 }
 
@@ -323,7 +368,7 @@ a {
 
 @keyframes pulse {
   50% {
-    opacity: 0.45;
+    opacity: 0.5;
   }
 }
 
@@ -337,22 +382,23 @@ a {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
   padding: 10px;
   text-align: center;
+  background: color-mix(in srgb, var(--vert) 70%, transparent);
 }
 
 .paused h2 {
-  font-family: var(--pixel);
-  font-size: clamp(14px, 4vw, 24px);
-  text-shadow:
-    3px 3px 0 var(--brand-red),
-    5px 5px 0 #000;
+  font-family: var(--f-display);
+  font-size: clamp(32px, 7vw, 56px);
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--toum);
 }
 
 .paused p {
-  color: var(--muted);
-  font-size: 18px;
+  color: var(--toum);
+  font-size: 17px;
 }
 
 /* ---------- overlays and cards ---------- */
@@ -364,37 +410,66 @@ a {
   display: flex;
   overflow-y: auto;
   padding: 10px;
-  background: rgba(8, 6, 20, 0.62);
+  background: color-mix(in srgb, var(--vert) 84%, transparent);
 }
 
 .card {
+  --on: var(--vert);
+  --off: var(--toum);
   position: relative;
   /* margin: auto centres the card and still scrolls from the top when it's taller. */
   margin: auto;
-  width: min(440px, 100%);
-  background: var(--panel);
-  border: 2px solid #000;
-  box-shadow: 6px 6px 0 #000;
-  padding: 14px 16px 16px;
+  width: min(460px, 100%);
+  background: var(--toum);
+  color: var(--vert);
+  border-radius: 0;
+  box-shadow: 0 6px 0 var(--shadow);
+  padding: 18px 20px 22px;
   text-align: center;
-  animation: pop 0.28s steps(4) both;
+  animation: pop 0.24s ease-out both;
   -webkit-user-select: text;
   user-select: text;
 }
 
 .card > * + * {
-  margin-top: 12px;
+  margin-top: 14px;
 }
 
 @keyframes pop {
   from {
-    transform: scale(0.85);
+    transform: translateY(10px) scale(0.97);
     opacity: 0;
   }
   to {
-    transform: scale(1);
+    transform: none;
     opacity: 1;
   }
+}
+
+/* The guide's tray card (Cabaret): a chain of étincelles inside the edge. Used for the start and
+   coupon cards only, "avec parcimonie". */
+.card.spark {
+  padding: 34px 30px 32px;
+}
+
+.card.spark::before {
+  content: "";
+  position: absolute;
+  inset: 9px;
+  pointer-events: none;
+  background-image:
+    var(--sparkle-navet), var(--sparkle-navet), var(--sparkle-navet), var(--sparkle-navet);
+  background-size: 12px 12px;
+  background-repeat:
+    space no-repeat,
+    space no-repeat,
+    no-repeat space,
+    no-repeat space;
+  background-position:
+    left top,
+    left bottom,
+    left top,
+    right top;
 }
 
 .card-bar {
@@ -409,76 +484,94 @@ a {
 }
 
 .kicker {
-  font-family: var(--pixel);
-  font-size: 10px;
-  color: var(--gold);
-  letter-spacing: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--f-cond);
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--vert);
 }
 
 .kicker::before {
-  content: "● ";
-  animation: blink 1s steps(2) infinite;
-}
-
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
+  color: var(--navet);
 }
 
 h1,
 h2,
 h3 {
-  font-weight: normal;
+  font-family: var(--f-display);
+  font-weight: 400;
   overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .title {
-  font-family: var(--pixel);
-  font-size: clamp(20px, 6.4vw, 34px);
-  line-height: 1.3;
-  text-shadow:
-    3px 3px 0 var(--brand-red),
-    6px 6px 0 #000;
+  font-size: clamp(38px, 10.5vw, 54px);
+  line-height: 1;
+  letter-spacing: -0.015em;
 }
 
 .heading {
-  font-family: var(--pixel);
-  font-size: clamp(14px, 4.6vw, 22px);
-  line-height: 1.35;
-  text-shadow:
-    3px 3px 0 var(--brand-red),
-    5px 5px 0 #000;
+  font-size: clamp(28px, 7.4vw, 36px);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
 }
 
 .lede,
 .sub {
-  color: var(--muted);
-  font-size: 21px;
+  color: var(--vert);
+  font-size: 19px;
+  line-height: 1.35;
 }
 
 .small {
-  color: var(--muted);
-  font-size: 17px;
-  line-height: 1.2;
+  color: var(--muted-ink);
+  font-size: 15px;
+  line-height: 1.3;
 }
 
 .note {
-  font-size: 18px;
-  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.3;
+  color: var(--vert);
+}
+
+/* Status notes are flat colour blocks with Vert text: Hummus for "heads up", Avocat for "done". */
+.note.ok,
+.note.warn {
+  padding: 8px 12px;
 }
 
 .note.ok {
-  color: var(--meter-low);
+  background: var(--avocat);
 }
 
 .note.warn {
-  color: var(--gold);
+  background: var(--hummus);
 }
 
+/* The guide's "mauvaise utilisation" mark: a Tomate disc with a Toum cross, Vert text. */
 .error {
-  color: #ffb4ae;
-  font-size: 18px;
+  color: var(--vert);
+  font-size: 16px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.error::before {
+  content: "×";
+  display: inline-grid;
+  place-items: center;
+  width: 1.3em;
+  height: 1.3em;
+  margin-right: 0.5em;
+  border-radius: 50%;
+  background: var(--tomate);
+  color: var(--toum);
+  font: 600 1em/1 var(--f-cond);
+  vertical-align: -0.2em;
 }
 
 /* ---------- buttons, toggles, links ---------- */
@@ -488,53 +581,75 @@ h3 {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 44px;
-  font-family: var(--pixel);
-  font-size: 11px;
-  line-height: 1.4;
+  min-height: 48px;
+  font-family: var(--f-cond);
+  font-size: 18px;
+  line-height: 1.1;
+  letter-spacing: 0.06em;
   text-align: center;
   text-decoration: none;
-  color: var(--brand-charcoal);
-  background: var(--brand-cream);
-  border: 2px solid #000;
-  box-shadow: 0 4px 0 #000;
-  padding: 10px 12px;
+  text-transform: uppercase;
+  color: var(--toum);
+  background: var(--vert);
+  border: 0;
+  border-radius: 0;
+  box-shadow: 0 4px 0 var(--shadow);
+  padding: 10px 16px;
   cursor: pointer;
   overflow-wrap: anywhere;
+  transition:
+    transform 0.08s ease-out,
+    box-shadow 0.08s ease-out,
+    background-color 0.12s;
 }
 
 .btn:hover {
-  filter: brightness(1.08);
+  background: color-mix(in srgb, var(--vert) 86%, var(--toum));
 }
 
 .btn:active {
   transform: translateY(3px);
-  box-shadow: 0 1px 0 #000;
+  box-shadow: 0 1px 0 var(--shadow);
 }
 
 .btn:disabled {
   cursor: default;
-  opacity: 0.6;
+  opacity: 0.55;
   transform: none;
-  box-shadow: 0 4px 0 #000;
+  box-shadow: 0 4px 0 var(--shadow);
 }
 
+/* Navet takes Toum text at 24px and up only (3.35:1 is the large-text threshold). */
 .btn.primary {
-  background: var(--brand-red);
-  color: #fff;
+  background: var(--navet);
+  color: var(--toum);
+  font-size: 24px;
+  letter-spacing: 0.04em;
+}
+
+/* Hover darkens Navet (towards Vert) so the Toum label never loses contrast. */
+.btn.primary:hover {
+  background: color-mix(in srgb, var(--navet) 90%, var(--vert));
 }
 
 .btn.ghost {
   background: transparent;
-  color: var(--ink);
-  border-color: var(--brand-cream);
-  box-shadow: none;
+  color: var(--vert);
+  box-shadow: inset 0 0 0 2px var(--vert);
+}
+
+.btn.ghost:hover {
+  background: color-mix(in srgb, var(--vert) 8%, transparent);
+}
+
+.btn.ghost:active {
+  transform: none;
 }
 
 .btn.big {
   width: 100%;
-  font-size: 12px;
-  padding: 14px;
+  font-size: 26px;
+  padding: 12px 16px;
 }
 
 .btn-row {
@@ -549,130 +664,175 @@ h3 {
 }
 
 .linkish {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: none;
   border: 0;
-  color: var(--gold);
+  color: var(--vert);
+  font-family: var(--f-cond);
+  font-size: 16px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
   text-decoration: underline;
+  text-underline-offset: 0.2em;
   cursor: pointer;
-  font-size: 18px;
   min-height: 44px;
   padding: 0 4px;
 }
 
+.linkish svg {
+  width: 14px;
+  height: 14px;
+}
+
 .toggle {
   display: inline-flex;
-  border: 2px solid #000;
-  background: rgba(0, 0, 0, 0.35);
+  border: 2px solid var(--on);
+  color: var(--on);
 }
 
 .toggle button,
 .icon-btn {
   min-width: 44px;
   min-height: 32px;
-  font-family: var(--pixel);
-  font-size: 9px;
+  font-family: var(--f-cond);
+  font-size: 14px;
+  letter-spacing: 0.08em;
   background: transparent;
   border: 0;
-  color: var(--muted);
+  border-radius: 0;
+  color: var(--on);
   cursor: pointer;
   display: grid;
   place-items: center;
 }
 
 .toggle button[aria-pressed="true"] {
-  background: var(--brand-cream);
-  color: var(--brand-charcoal);
+  background: var(--on);
+  color: var(--off);
 }
 
 .icon-btn {
-  border: 2px solid #000;
-  background: rgba(0, 0, 0, 0.35);
-  color: var(--ink);
+  border: 2px solid var(--on);
+}
+
+.icon-btn[aria-pressed="false"] {
+  opacity: 0.75;
 }
 
 .icon-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
+}
+
+/* The page header sits on Vert: the toggles draw in Toum. */
+.bar {
+  --on: var(--toum);
+  --off: var(--vert);
 }
 
 /* ---------- logo and reward cards ---------- */
 
 .logo {
   display: inline-block;
-  height: 30px;
+  height: 26px;
   width: auto;
+  color: var(--toum);
 }
 
 .logo-sm {
   height: 22px;
 }
 
+.card .logo {
+  color: var(--vert);
+}
+
 .rewards {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 10px;
 }
 
 .reward {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px;
-  background: var(--brand-cream);
-  color: var(--brand-charcoal);
-  border: 2px solid #000;
-  box-shadow: 3px 3px 0 #000;
+  gap: 10px;
+  padding: 12px;
+  background: var(--vert);
+  color: var(--toum);
+  box-shadow: 0 4px 0 var(--shadow);
   text-align: left;
-  overflow: hidden;
+  min-width: 0;
 }
 
 .reward svg {
-  width: 30px;
+  width: 34px;
   height: auto;
   flex-shrink: 0;
-  padding: 4px;
-  background: var(--brand-charcoal);
-  border: 2px solid #000;
+}
+
+.reward > div {
+  min-width: 0;
 }
 
 .reward-goal {
-  font-size: 18px;
-  line-height: 1;
+  font-size: 15px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
 }
 
 .reward-name {
-  font-family: var(--pixel);
-  font-size: 9px;
-  line-height: 1.4;
-  color: #b01d15;
+  margin-top: 3px;
+  font-family: var(--f-cond);
+  font-size: 16px;
+  line-height: 1.1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--avocat);
   overflow-wrap: anywhere;
 }
 
 .reward-status {
-  font-family: var(--pixel);
-  font-size: 8px;
-  margin-top: 2px;
+  display: inline-block;
+  margin-top: 6px;
+  padding: 1px 6px;
+  font-family: var(--f-cond);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: var(--avocat);
+  color: var(--vert);
 }
 
-.reward[data-status="gone"] {
-  background: #d9d3cb;
+/* Sold out or offline: the tile steps back to an outline. */
+.reward[data-status="gone"],
+.reward[data-status="offline"] {
+  background: transparent;
+  color: var(--vert);
+  box-shadow: inset 0 0 0 2px var(--vert);
 }
 
-.reward[data-status="gone"] .reward-status {
-  color: #9e1a12;
+.reward[data-status="gone"] .reward-name,
+.reward[data-status="offline"] .reward-name {
+  color: var(--vert);
 }
 
-.reward[data-status="unlocked"] .reward-status {
-  color: #11643a;
+.reward[data-status="gone"] .reward-status,
+.reward[data-status="offline"] .reward-status {
+  background: var(--vert);
+  color: var(--toum);
 }
 
 .campaign-note {
-  padding: 10px;
-  border: 2px dashed rgba(255, 201, 60, 0.6);
-  background: rgba(255, 201, 60, 0.07);
-  color: var(--ink);
-  font-size: 19px;
+  padding: 12px 14px;
+  background: var(--hummus);
+  color: var(--vert);
+  font-size: 18px;
+  line-height: 1.3;
+  text-align: left;
 }
 
 /* ---------- results ---------- */
@@ -680,96 +840,106 @@ h3 {
 .stats {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  gap: 8px;
 }
 
 .stat {
-  padding: 6px 4px;
-  background: rgba(0, 0, 0, 0.25);
-  border: 2px solid #000;
+  padding: 10px 4px 9px;
+  background: var(--vert);
+  box-shadow: 0 4px 0 var(--shadow);
 }
 
 .stat b {
   display: block;
-  font-family: var(--pixel);
-  font-weight: normal;
-  font-size: clamp(13px, 4vw, 20px);
-  color: var(--gold);
-  text-shadow: 2px 2px 0 #000;
-  margin-bottom: 4px;
+  font-family: var(--f-display);
+  font-weight: 400;
+  font-size: clamp(24px, 6.6vw, 34px);
+  line-height: 1;
+  color: var(--avocat);
+  margin-bottom: 6px;
 }
 
 .stat span {
-  font-family: var(--pixel);
-  font-size: 8px;
-  color: var(--muted);
+  font-family: var(--f-cond);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--toum);
 }
 
 .badge {
   display: inline-block;
-  font-family: var(--pixel);
-  font-size: 8px;
-  color: #06210f;
-  background: var(--meter-low);
-  padding: 3px 5px;
+  font-family: var(--f-cond);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1.2;
+  color: var(--vert);
+  background: var(--avocat);
+  padding: 3px 8px;
   white-space: nowrap;
 }
 
 .mini-board {
   list-style: none;
   text-align: left;
-  font-size: 18px;
+  font-size: 16px;
 }
 
 .mini-board li {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  padding: 2px 0;
-  border-bottom: 1px dashed var(--panel-line);
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- forms ---------- */
 
 form {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   text-align: left;
 }
 
 .field {
   display: grid;
-  gap: 4px;
+  gap: 5px;
 }
 
 .field label {
-  font-family: var(--pixel);
-  font-size: 9px;
-  line-height: 1.5;
+  font-family: var(--f-cond);
+  font-size: 15px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  line-height: 1.3;
 }
 
 .field input {
   width: 100%;
-  min-height: 44px;
-  font-family: var(--mono);
-  font-size: 22px;
-  color: var(--ink);
-  background: var(--bg);
-  border: 2px solid var(--brand-cream);
-  padding: 6px 9px;
+  min-height: 48px;
+  font-family: var(--f-body);
+  font-size: 20px;
+  color: var(--vert);
+  background: var(--toum);
+  border: 2px solid var(--vert);
+  border-radius: 0;
+  padding: 6px 12px;
 }
 
 .field input[aria-invalid="true"] {
-  border-color: #ff8a80;
+  border-color: var(--tomate);
+  background: color-mix(in srgb, var(--tomate) 9%, var(--toum));
 }
 
 .check-row {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: flex-start;
-  font-size: 18px;
-  line-height: 1.2;
-  color: var(--ink);
+  font-size: 16px;
+  line-height: 1.3;
+  color: var(--vert);
   cursor: pointer;
 }
 
@@ -778,23 +948,22 @@ form {
   height: 22px;
   margin-top: 1px;
   flex-shrink: 0;
-  accent-color: var(--brand-red);
+  accent-color: var(--navet);
 }
 
 .privacy {
-  font-size: 16px;
-  line-height: 1.2;
-  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--muted-ink);
 }
 
 /* ---------- coupon ---------- */
 
 .coupon {
-  padding: 12px;
-  background: var(--brand-cream);
-  color: var(--brand-charcoal);
-  border: 2px dashed var(--brand-charcoal);
-  box-shadow: 4px 4px 0 #000;
+  padding: 14px 14px 16px;
+  background: var(--vert);
+  color: var(--toum);
+  box-shadow: 0 5px 0 var(--shadow);
   text-align: center;
 }
 
@@ -802,31 +971,55 @@ form {
   margin-top: 8px;
 }
 
-.coupon h3 {
-  font-family: var(--pixel);
-  font-size: 11px;
-  line-height: 1.4;
-  color: #b01d15;
+.coupon svg {
+  width: auto;
+  height: 30px;
 }
 
+.coupon h3 {
+  font-family: var(--f-cond);
+  font-size: 16px;
+  line-height: 1.2;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--avocat);
+}
+
+/* A code is read aloud and typed in, and pool codes are case-sensitive printable ASCII (3-64
+   characters, see lib/server/admin/pools.ts): shown exactly as stored, in a monospace that keeps
+   0/O and I/l/1 apart. The one place the brand's condensed upper case gives way to legibility. */
 .code {
   display: block;
-  font-family: var(--mono);
-  font-size: clamp(28px, 9vw, 38px);
-  letter-spacing: 2px;
-  color: var(--brand-charcoal);
+  font-family:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-weight: 700;
+  font-size: clamp(22px, 6.6vw, 32px);
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  font-variant-ligatures: none;
+  color: var(--toum);
   -webkit-user-select: all;
   user-select: all;
   overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .coupon .btn {
-  font-size: 10px;
-  min-height: 40px;
+  font-size: 16px;
+  min-height: 42px;
+  background: var(--toum);
+  color: var(--vert);
+}
+
+.coupon p,
+.coupon .small {
+  color: var(--toum);
+  font-size: 15px;
 }
 
 .coupon a {
-  color: #8a1710;
+  color: var(--avocat);
 }
 
 /* ---------- leaderboard ---------- */
@@ -834,29 +1027,32 @@ form {
 .board {
   width: 100%;
   border-collapse: collapse;
-  font-size: 18px;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
 }
 
 .board caption {
   caption-side: bottom;
-  padding-top: 8px;
-  font-size: 16px;
-  color: var(--muted);
+  padding-top: 10px;
+  font-size: 14px;
+  color: var(--muted-ink);
 }
 
 .board th {
-  font-family: var(--pixel);
-  font-weight: normal;
-  font-size: 8px;
-  color: var(--muted);
-  padding: 4px 3px;
+  font-family: var(--f-cond);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted-ink);
+  padding: 4px 4px 6px;
   text-align: right;
 }
 
 .board td {
-  padding: 4px 3px;
+  padding: 6px 4px;
   text-align: right;
-  border-top: 1px dashed var(--panel-line);
+  border-top: 1px solid var(--line);
 }
 
 .board th:nth-child(2),
@@ -867,8 +1063,8 @@ form {
 }
 
 .board tr.me td {
-  background: rgba(255, 201, 60, 0.15);
-  color: var(--gold);
+  background: var(--avocat);
+  color: var(--vert);
 }
 
 .board .badge {
@@ -876,29 +1072,39 @@ form {
   vertical-align: 2px;
 }
 
+.board tr.me .badge {
+  background: var(--vert);
+  color: var(--toum);
+}
+
 /* ---------- toast, live region ---------- */
 
 .toast {
   position: fixed;
   left: 50%;
-  bottom: 16px;
+  bottom: 18px;
   transform: translateX(-50%);
   z-index: 20;
   max-width: calc(100% - 24px);
-  font-family: var(--pixel);
-  font-size: 10px;
-  line-height: 1.4;
+  font-family: var(--f-cond);
+  font-size: 17px;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   text-align: center;
-  background: var(--meter-low);
-  color: #06210f;
-  border: 2px solid #000;
-  box-shadow: 0 4px 0 #000;
-  padding: 10px 12px;
+  /* Avocat shows on both Vert and Toum. */
+  background: var(--avocat);
+  color: var(--vert);
+  box-shadow: 0 4px 0 var(--shadow);
+  padding: 10px 16px;
 }
 
 @media (max-width: 360px) {
   .card {
-    padding: 12px 10px 14px;
+    padding: 14px 12px 16px;
+  }
+  .card.spark {
+    padding: 30px 20px 26px;
   }
   .btn-row,
   .rewards {
@@ -928,7 +1134,28 @@ form {
 }
 
 .small-btn {
-  font-size: 9px;
-  padding: 6px 8px;
+  font-size: 15px;
+  padding: 6px 10px;
   flex: none;
+}
+
+.small-btn svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+/* Not-found card: one block per language, a hairline between them. */
+.card > .logo {
+  margin-bottom: 10px;
+}
+
+.nf > * + * {
+  margin-top: 14px;
+}
+
+.nf + .nf {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
 }

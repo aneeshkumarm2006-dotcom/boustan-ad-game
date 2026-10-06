@@ -60,6 +60,7 @@ import { readString, writeString } from "@/lib/storage";
 // Imported statically: a separate chunk only started downloading after hydration, which cost
 // ~300 ms of first-playable time on 4G (EMB-11). It adds ~10 KB gzipped to the page.
 import { Game, type GameEvent, type GameState, type RunResult } from "../engine";
+import type { CanvasFonts } from "../fonts";
 import { LeaderboardScreen, MyRewardsScreen } from "./BoardScreens";
 import { ClaimScreen, type ClaimErrorKey, type ClaimSubmit } from "./ClaimScreen";
 import { UiContext, type Ui } from "./context";
@@ -161,7 +162,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
   ]);
 }
 
-export function GameApp({ font, patterns }: { font: string; patterns: HostPattern[] }) {
+export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: HostPattern[] }) {
+  const { display, condensed } = fonts;
   const boot = useBoot();
   const [lang, setLangState] = useStateFrom<Lang>(boot?.lang ?? "fr");
   const [muted, setMuted] = useStateFrom(boot?.muted ?? true);
@@ -408,7 +410,7 @@ export function GameApp({ font, patterns }: { font: string; patterns: HostPatter
         garlic: garlicRef.current!,
         garlicValue: garlicValueRef.current!,
       },
-      font,
+      fonts: { display, condensed },
       translator: createTranslator(document.documentElement.lang === "en" ? "en" : "fr"),
       portrait: boot.portrait,
       reducedMotion: boot.reducedMotion,
@@ -422,7 +424,7 @@ export function GameApp({ font, patterns }: { font: string; patterns: HostPatter
       gameRef.current = null;
       setEngineReady(false);
     };
-  }, [boot, font]);
+  }, [boot, display, condensed]);
 
   useEffect(() => {
     if (!engineReady) return;

@@ -59,6 +59,8 @@ export async function renderCouponEmail(d: CouponEmailData): Promise<RenderedEma
     codes: d.codes,
     links,
     legal: { ...LEGAL, contact: env().EMAIL_REPLY_TO ?? LEGAL.contact },
+    // The logo and the web fonts are served by the app itself.
+    appUrl: env().appUrl,
   });
   const [html, text] = await Promise.all([render(element), render(element, { plainText: true })]);
   return {

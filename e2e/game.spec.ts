@@ -19,7 +19,7 @@ test("full run in French: both rewards, one claim, two codes (AC-01, AC-02)", as
   const errors = watchConsole(page);
   await page.goto("/?lang=fr");
   await stcReady(page);
-  await expect(page.getByRole("heading", { level: 1 })).toContainText("SAUVEZ LE");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText("Sauvez le");
   await play(page);
 
   // 100 m unlocks the Coke mid-run; the run keeps going (GAME-02).
@@ -30,7 +30,7 @@ test("full run in French: both rewards, one claim, two codes (AC-01, AC-02)", as
   await expect(page.getByTestId("hud-distance")).toHaveText(/^1\d\d m$/);
 
   await unlockBothAndDie(page);
-  await expect(page.getByRole("heading", { name: "REPOSE EN PITA" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Repose en pita" })).toBeVisible();
   await page.getByRole("button", { name: "RÉCLAMER MES RÉCOMPENSES" }).click();
 
   await page.getByLabel("Votre courriel").fill("alex.tremblay+jeu@gmail.com");

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { GameApi, IssuedCode, LeaderboardResponse } from "@/lib/api";
 import { useUi } from "./context";
 import { CodeCard } from "./CouponScreen";
-import { Overlay, Tools } from "./parts";
+import { BackArrow, Overlay, Tools } from "./parts";
 
 /** Leaderboard (LB-04): top 10 plus the player's own row. Never shows emails. */
 export function LeaderboardScreen({
@@ -39,7 +39,7 @@ export function LeaderboardScreen({
     <Overlay labelledBy="lb-title">
       <div className="card-bar">
         <button type="button" className="linkish" onClick={onBack} data-autofocus>
-          ← {t.t("common.back")}
+          <BackArrow /> {t.t("common.back")}
         </button>
         <Tools />
       </div>
@@ -93,7 +93,7 @@ export function MyRewardsScreen({ codes, onBack }: { codes: IssuedCode[]; onBack
     <Overlay labelledBy="rewards-title">
       <div className="card-bar">
         <button type="button" className="linkish" onClick={onBack} data-autofocus>
-          ← {t.t("common.back")}
+          <BackArrow /> {t.t("common.back")}
         </button>
         <Tools />
       </div>

@@ -4,8 +4,8 @@
   },
   "brand": {
     "game": "SAUVEZ LE POULET",
-    "titleTop": "SAUVEZ LE",
-    "titleBottom": "POULET",
+    "titleTop": "Sauvez le",
+    "titleBottom": "poulet",
     "logoAlt": "Boustan"
   },
   "common": {
@@ -45,7 +45,7 @@
     "free_coke": {
       "name": "Coke gratuit",
       "short": "COKE GRATUIT",
-      "goal": "Atteignez {m} m",
+      "goal": "Atteignez {m} m",
       "terms": "Une boisson gazeuse de 355 mL à l'achat de tout article, dans les restaurants participants. Une par personne. Aucune valeur monétaire."
     },
     "free_garlic_sauce": {
@@ -71,7 +71,7 @@
     "hits": ["AÏE", "COT COT!", "NOOON", "OUPS"]
   },
   "pause": {
-    "title": "PAUSE",
+    "title": "Pause",
     "resume": "REPRENDRE",
     "hint": "Touchez n'importe où pour reprendre"
   },
@@ -95,7 +95,7 @@
     "garlicCount": "{n} SAUCES À L'AIL!"
   },
   "results": {
-    "title": "REPOSE EN PITA",
+    "title": "Repose en pita",
     "death": {
       "pickle": "Assommé par un pot de marinades. Gênant.",
       "pita": "Trébuché sur une pile de pitas. Ironique.",
@@ -131,9 +131,9 @@
     "copied": "COPIÉ! LANCEZ LE DÉFI"
   },
   "claim": {
-    "titleOne": "RÉCLAMEZ VOTRE RÉCOMPENSE",
-    "titleMany": "RÉCLAMEZ VOS RÉCOMPENSES",
-    "titleSave": "ENREGISTREZ VOTRE POINTAGE",
+    "titleOne": "Réclamez votre récompense",
+    "titleMany": "Réclamez vos récompenses",
+    "titleSave": "Enregistrez votre pointage",
     "cta": "RÉCLAMER MA RÉCOMPENSE",
     "ctaMany": "RÉCLAMER MES RÉCOMPENSES",
     "ctaSave": "ENREGISTRER MON POINTAGE",
@@ -142,7 +142,7 @@
     "emailHintSave": "Il sert seulement au classement.",
     "nickname": "Surnom (facultatif)",
     "nicknameHint": "De 2 à 16 caractères. Affiché au classement. Sans surnom, on vous en donne un.",
-    "reroll": "🎲 Autre nom",
+    "reroll": "Autre nom",
     "privacy": "Boustan utilise votre courriel pour vous envoyer votre code et afficher votre pointage, et vous envoie des offres seulement si vous y consentez. Vos données peuvent être traitées à l'extérieur du Québec. Elles sont supprimées 90 jours après la campagne, sauf si vous acceptez de recevoir nos offres. <policy>Politique de confidentialité</policy> · <officer>Responsable de la protection des renseignements personnels</officer>",
     "sending": "ENVOI…",
     "recognized": "Envoyer à {email}?",
@@ -170,8 +170,8 @@
     "withdrawn": "Désabonnement des offres et nouvelles de Boustan par courriel."
   },
   "coupon": {
-    "title": "VOTRE CODE",
-    "titleMany": "VOS CODES",
+    "title": "Votre code",
+    "titleMany": "Vos codes",
     "expires": "Expire le {date}",
     "howTo": "Montrez ce code au comptoir ou entrez-le dans l'appli Boustan.",
     "fullTerms": "Conditions complètes",
@@ -180,11 +180,11 @@
     "resend": "RENVOYER LE COURRIEL",
     "resent": "COURRIEL ENVOYÉ",
     "copyLabel": "Copier le code pour {reward}",
-    "titleNone": "ÉPUISÉ POUR L'INSTANT",
+    "titleNone": "Épuisé pour l'instant",
     "unavailable": "{reward} : épuisé pour l'instant."
   },
   "lb": {
-    "title": "CLASSEMENT",
+    "title": "Classement",
     "rank": "#",
     "name": "NOM",
     "garlic": "AIL",
@@ -198,7 +198,7 @@
     "caption": "Classement par sauces à l'ail, puis le moins de coups, puis la distance."
   },
   "myRewards": {
-    "title": "MES RÉCOMPENSES",
+    "title": "Mes récompenses",
     "empty": "Aucune récompense pour l'instant."
   },
   "gate": {
@@ -228,6 +228,11 @@
     "unsubscribe": "Se désabonner des offres",
     "contact": "Contact : {email}",
     "viewInvalid": "Ce lien n'est pas valide."
+  },
+  "notFound": {
+    "title": "Page introuvable",
+    "body": "Cette page a pris la fuite. Le poulet, lui, court encore.",
+    "cta": "Retour au jeu"
   },
   "unsubscribe": {
     "title": "Désabonnement confirmé",

@@ -203,10 +203,16 @@ test("landscape at 1280 px wide fits without scrolling (EMB-01)", async ({ page 
   await page.goto(`${HOST}/?lang=fr&width=1280`);
   const frame = await gameFrame(page);
   await stcReady(frame);
-  const canvas = await frame
-    .locator("canvas")
-    .evaluate((c: HTMLCanvasElement) => [c.width, c.height]);
-  expect(canvas).toEqual([320, 180]);
+  // The backing store is a whole multiple of the 320 x 180 logical canvas, so type stays sharp.
+  const canvas = await frame.locator("canvas").evaluate((c: HTMLCanvasElement) => ({
+    width: c.width,
+    height: c.height,
+    logicalW: c.dataset.logicalW,
+    logicalH: c.dataset.logicalH,
+  }));
+  expect([canvas.logicalW, canvas.logicalH]).toEqual(["320", "180"]);
+  expect(canvas.width % 320).toBe(0);
+  expect(canvas.width / canvas.height).toBeCloseTo(320 / 180, 3);
   await expect
     .poll(() =>
       frame.evaluate(() => document.documentElement.scrollHeight <= window.innerHeight + 1),

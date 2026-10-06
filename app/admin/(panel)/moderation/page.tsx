@@ -125,7 +125,7 @@ export default async function ModerationPage() {
           </div>
         )}
         {flagged.length === 0 ? (
-          <p className="adm-note">No flagged runs. 🎉</p>
+          <p className="adm-note">No flagged runs.</p>
         ) : (
           <div className="adm-table-wrap">
             <table className="adm-table">

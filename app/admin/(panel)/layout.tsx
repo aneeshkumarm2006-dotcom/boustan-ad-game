@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/server/admin/auth";
+import { Wordmark } from "../Wordmark";
 import { AdminNav } from "./forms";
 import { signOut } from "./actions";
 
@@ -11,7 +12,7 @@ export default async function PanelLayout({ children }: { children: React.ReactN
       <header className="adm-top">
         <div className="adm-top-inner">
           <Link href="/admin" className="adm-brand">
-            BOUSTAN
+            <Wordmark />
           </Link>
           <AdminNav />
           <div className="adm-who">

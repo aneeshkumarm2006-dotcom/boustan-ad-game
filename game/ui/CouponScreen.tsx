@@ -61,7 +61,7 @@ export function CouponScreen({
   const { t } = useUi();
   const [resend, setResend] = useState<"idle" | "sending" | "sent" | "failed">("idle");
   return (
-    <Overlay labelledBy="coupon-title">
+    <Overlay labelledBy="coupon-title" spark>
       <div className="card-bar">
         <Tools />
       </div>

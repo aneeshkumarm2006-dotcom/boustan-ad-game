@@ -7,7 +7,7 @@ test("home page renders the start screen in French for a French browser", async 
   const errors = watchConsole(fresh);
   const response = await fresh.goto("/");
   expect(response?.ok()).toBe(true);
-  await expect(fresh.getByRole("heading", { level: 1 })).toContainText("SAUVEZ LE");
+  await expect(fresh.getByRole("heading", { level: 1 })).toContainText("Sauvez le");
   await expect(fresh.getByTestId("play")).toHaveText("COURS, POULET, COURS");
   await stcReady(fresh);
   expect(errors).toEqual([]);
@@ -33,4 +33,33 @@ test("sets no cookies (EMB-07)", async ({ page, context }) => {
   await page.goto("/");
   await stcReady(page);
   expect(await context.cookies()).toEqual([]);
+});
+
+test("declares the brand theme colour and a social preview", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute("content", "#073F36");
+  await expect(page.locator('meta[property="og:image"]')).toHaveAttribute(
+    "content",
+    /opengraph-image/,
+  );
+  await expect(page.locator('meta[property="og:image:width"]')).toHaveAttribute("content", "1200");
+  expect((await page.request.get("/opengraph-image.png")).headers()["content-type"]).toBe(
+    "image/png",
+  );
+});
+
+test("an unknown URL gets the branded 404 in both languages", async ({ page }) => {
+  const response = await page.goto("/no-such-page");
+  expect(response?.status()).toBe(404);
+  await expect(page.getByRole("img", { name: "Boustan" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Page introuvable" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Retour au jeu" })).toHaveAttribute(
+    "href",
+    "/?lang=fr",
+  );
+  await expect(page.getByRole("link", { name: "Back to the game" })).toHaveAttribute(
+    "href",
+    "/?lang=en",
+  );
 });

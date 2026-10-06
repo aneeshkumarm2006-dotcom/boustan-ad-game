@@ -3,6 +3,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 import { LANGS, splitRich } from "@/i18n";
 import type { RewardId, RewardRules } from "@/game-core";
+import { WORDMARK } from "@/lib/brand";
 import { outboundUrl, type LinkTarget } from "@/lib/links";
 import { ART, type ArtName } from "../pixel-art";
 import { useUi } from "./context";
@@ -36,13 +37,16 @@ export function PixelIcon({ name, className }: { name: ArtName; className?: stri
   );
 }
 
-/** ✓ drawn as pixels: the pixel fonts have no check mark glyph. */
+/** ✓ drawn as a stroke: the brand fonts have no check mark glyph. */
 export function CheckIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 7 6" shapeRendering="crispEdges" aria-hidden="true">
+    <svg className={className} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
       <path
-        d="M6 0h1v2H6zM5 2h1v1H5zM4 3h1v1H4zM3 4h1v1H3zM2 5h1v1H2zM1 4h1v1H1zM0 3h1v1H0z"
-        fill="currentColor"
+        d="M2.5 8.5 6.5 12.5 13.5 4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.6"
+        strokeLinecap="square"
       />
     </svg>
   );
@@ -50,48 +54,75 @@ export function CheckIcon({ className }: { className?: string }) {
 
 export function PauseIcon() {
   return (
-    <svg viewBox="0 0 5 5" shapeRendering="crispEdges" aria-hidden="true">
-      <path d="M0 0h2v5H0zM3 0h2v5H3z" fill="currentColor" />
+    <svg viewBox="0 0 10 10" aria-hidden="true" focusable="false">
+      <path d="M1 0h3v10H1zM6 0h3v10H6z" fill="currentColor" />
     </svg>
   );
 }
 
 function SoundIcon({ on }: { on: boolean }) {
   return (
-    <svg viewBox="0 0 9 8" shapeRendering="crispEdges" aria-hidden="true">
-      <path d="M0 3h2v2H0zM2 2h1v4H2zM3 1h1v6H3zM4 0h1v8H4z" fill="currentColor" />
-      {on ? (
-        <path d="M6 3h1v2H6zM7 1h1v1H7zM8 2h1v4H8zM7 6h1v1H7z" fill="currentColor" />
-      ) : (
-        <path d="M6 2h1v1H6zM8 2h1v1H8zM7 3h1v2H7zM6 5h1v1H6zM8 5h1v1H8z" fill="currentColor" />
-      )}
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M3 9h4l5-4v14l-5-4H3z" fill="currentColor" />
+      <path
+        d={on ? "M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" : "M16 9l6 6M22 9l-6 6"}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="square"
+      />
+    </svg>
+  );
+}
+
+/** A die, drawn: the nickname re-roll used a colour emoji, which is off-palette. */
+export function DiceIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <rect
+        x="1.5"
+        y="1.5"
+        width="13"
+        height="13"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+      />
+      <path d="M4.5 4.5h2v2h-2zM9.5 4.5h2v2h-2zM6.5 9.5h3v2h-3z" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** ← as a drawn arrow: it doesn't depend on the font having the glyph. */
+export function BackArrow() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        d="M14 8H3M7.5 3.5 3 8l4.5 4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="square"
+      />
     </svg>
   );
 }
 
 /**
- * Placeholder wordmark until Boustan sends the logo SVG [Boustan]. Swap the contents of this
- * component for the real artwork; keep role="img" and the label.
+ * The Boustan logotype, the official vector artwork (lib/brand.ts). It takes the colour of the
+ * surrounding text, which the stylesheet sets to Toum on Vert and Vert on Toum, the only two
+ * colours the guide allows here (besides black).
  */
 export function BrandLogo({ small }: { small?: boolean }) {
   const { t } = useUi();
   return (
     <svg
       className={small ? "logo logo-sm" : "logo"}
-      viewBox="0 0 120 30"
+      viewBox={`0 0 ${WORDMARK.w} ${WORDMARK.h}`}
       role="img"
       aria-label={t.t("brand.logoAlt")}
     >
-      <rect x="1" y="1" width="118" height="28" fill="#E1251B" stroke="#000" strokeWidth="2" />
-      <text
-        x="60"
-        y="20"
-        textAnchor="middle"
-        fill="#F3EFEA"
-        style={{ font: "11px var(--font-pixel), monospace", letterSpacing: "1px" }}
-      >
-        BOUSTAN
-      </text>
+      <path d={WORDMARK.d} fill="currentColor" />
     </svg>
   );
 }
@@ -142,11 +173,14 @@ export function Overlay({
   labelledBy,
   children,
   focusKey,
+  spark,
 }: {
   labelledBy: string;
   children: ReactNode;
   /** Change it to move focus again (e.g. when a screen's content swaps). */
   focusKey?: string;
+  /** Border of étincelles, for the start and coupon cards (guide: "avec parcimonie"). */
+  spark?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -164,7 +198,7 @@ export function Overlay({
       aria-labelledby={labelledBy}
       tabIndex={-1}
     >
-      <div className="card">{children}</div>
+      <div className={spark ? "card spark" : "card"}>{children}</div>
     </div>
   );
 }

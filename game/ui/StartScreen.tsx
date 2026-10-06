@@ -42,7 +42,7 @@ export function StartScreen({
   const rules = campaign?.rules ?? DEFAULT_REWARD_RULES;
   const message = campaignMessage(campaign, t);
   return (
-    <Overlay labelledBy="start-title">
+    <Overlay labelledBy="start-title" spark>
       <div className="card-bar">
         <BrandLogo />
         <Tools />

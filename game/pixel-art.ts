@@ -1,7 +1,9 @@
 /**
  * Pixel art as row strings plus a palette, from the reference prototype. Pure data, so React
- * icons (PixelIcon) and the canvas sprites draw from the same source.
+ * icons (PixelIcon) and the canvas sprites draw from the same source. Every colour is a Boustan
+ * palette colour or a mix() of two of them (guide de style: no other colours).
  */
+import { PALETTE as P, mix } from "@/lib/brand";
 
 export interface PixelArt {
   rows: readonly string[];
@@ -9,13 +11,13 @@ export interface PixelArt {
 }
 
 const CHICKEN: Record<string, string> = {
-  W: "#fff7e6",
-  w: "#d8ccb6",
-  S: "#b9ad99",
-  R: "#ff3b3b",
-  Y: "#ffc93c",
-  O: "#ff9a1f",
-  K: "#1a1020",
+  W: P.toum,
+  w: mix(P.toum, P.vert, 0.12),
+  S: mix(P.toum, P.vert, 0.25),
+  R: P.tomate,
+  Y: P.poivron,
+  O: P.poivron,
+  K: P.vert,
 };
 
 const HEAD = [
@@ -73,6 +75,7 @@ export const ART = {
     ]),
     palette: CHICKEN,
   },
+  /** Shawarma wrap: the chicken's last stand when the spit catches it. */
   wrap: {
     rows: [
       "....TTTTTT....",
@@ -85,7 +88,14 @@ export const ART = {
       ".PPPPPPPPPPPP.",
       "..PPPPPPPPPP..",
     ],
-    palette: { T: "#e3b268", t: "#f6d9a0", C: "#a85a22", g: "#4cd07d", r: "#ff5c8a", P: "#fffaf0" },
+    palette: {
+      T: P.hummus,
+      t: mix(P.hummus, P.toum, 0.5),
+      C: mix(P.poivron, P.vert, 0.5),
+      g: P.laitue,
+      r: P.navet,
+      P: P.toum,
+    },
   },
   falafel: {
     rows: [
@@ -100,11 +110,15 @@ export const ART = {
       ".FFdFFFFF.",
       "...FFFF...",
     ],
-    palette: { F: "#a0662e", f: "#d39a55", d: "#5c3a17" },
+    palette: {
+      F: mix(P.poivron, P.vert, 0.4),
+      f: P.hummus,
+      d: mix(P.poivron, P.vert, 0.7),
+    },
   },
   /**
-   * Flying garlic potato, an obstacle. GAME-11: it must not read as a pickup, so unlike the
-   * reference it is browner, outlined in dark brown and has an angry face, and it never glows.
+   * Flying garlic potato, an obstacle. GAME-11: it must not read as a pickup, so it is hummus
+   * with a Vert outline and an angry face, trails a Tomate streak and never glows.
    */
   potato: {
     rows: [
@@ -118,15 +132,15 @@ export const ART = {
       "..ooooo..",
     ],
     palette: {
-      o: "#3d1f08",
-      G: "#c9862f",
-      g: "#e8a94a",
-      h: "#8a5418",
-      e: "#fff7e6",
-      k: "#1a1020",
+      o: P.vert,
+      G: P.hummus,
+      g: mix(P.hummus, P.toum, 0.55),
+      h: mix(P.hummus, P.vert, 0.3),
+      e: P.toum,
+      k: P.vert,
     },
   },
-  /** Garlic sauce cup, the pickup. */
+  /** Garlic sauce cup, the pickup: Toum, and the engine gives it an Avocat glow. */
   cup: {
     rows: [
       "..LLLL..",
@@ -138,9 +152,14 @@ export const ART = {
       ".cWWWWc.",
       "..cccc..",
     ],
-    palette: { L: "#fff3c4", C: "#e9e4d8", W: "#ffffff", c: "#bdb6a8" },
+    palette: {
+      L: P.toum,
+      C: mix(P.toum, P.vert, 0.15),
+      W: P.toum,
+      c: mix(P.toum, P.vert, 0.3),
+    },
   },
-  /** GAME-13: a plain red soda can. No brand name or logo until Boustan confirms the rights. */
+  /** GAME-13: a plain soda can. No brand name or logo until Boustan confirms the rights. */
   can: {
     rows: [
       ".ssssss.",
@@ -155,7 +174,13 @@ export const ART = {
       "SssssssS",
       ".SSSSSS.",
     ],
-    palette: { s: "#d9dde6", S: "#8a8f9c", R: "#e1251b", r: "#a8170f", h: "#ff8a80" },
+    palette: {
+      s: mix(P.toum, P.vert, 0.15),
+      S: mix(P.toum, P.vert, 0.4),
+      R: P.tomate,
+      r: mix(P.tomate, P.vert, 0.35),
+      h: mix(P.tomate, P.toum, 0.4),
+    },
   },
 } satisfies Record<string, PixelArt>;
 

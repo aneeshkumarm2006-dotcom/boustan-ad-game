@@ -28,7 +28,7 @@
     f.loading = "lazy";
     // Portrait on narrow containers, landscape on wide ones; the game then reports its height.
     f.style.cssText =
-      "border:0;display:block;width:100%;height:" +
+      "border:0;display:block;background:#073F36;width:100%;height:" +
       Math.max(400, Math.round(w < 600 ? w * 1.3 : w * 0.75)) +
       "px";
     el.appendChild(f);

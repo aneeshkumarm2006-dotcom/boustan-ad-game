@@ -304,11 +304,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
         )}
       </section>
 
-      <section
-        className="adm-card"
-        aria-labelledby="erase-title"
-        style={{ borderColor: "#eba39d" }}
-      >
+      <section className="adm-card adm-card-danger" aria-labelledby="erase-title">
         <h2 id="erase-title">Erase this player</h2>
         <p className="adm-note">
           Removes the email, nickname, consent log (including IP addresses), device tokens and the

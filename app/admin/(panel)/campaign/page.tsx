@@ -162,7 +162,9 @@ export default async function CampaignPage() {
         </section>
 
         <div>
-          <Submit pending="Saving…">Save changes</Submit>
+          <Submit className="adm-btn main" pending="Saving…">
+            Save changes
+          </Submit>
         </div>
       </ActionForm>
     </>

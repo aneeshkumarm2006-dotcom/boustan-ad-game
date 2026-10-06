@@ -4,8 +4,8 @@
   },
   "brand": {
     "game": "SAVE THE CHICKEN",
-    "titleTop": "SAVE THE",
-    "titleBottom": "CHICKEN",
+    "titleTop": "Save the",
+    "titleBottom": "chicken",
     "logoAlt": "Boustan"
   },
   "common": {
@@ -71,7 +71,7 @@
     "hits": ["OUCH", "BAWK!", "NOOO", "YIKES"]
   },
   "pause": {
-    "title": "PAUSED",
+    "title": "Paused",
     "resume": "RESUME",
     "hint": "Tap anywhere to resume"
   },
@@ -95,7 +95,7 @@
     "garlicCount": "{n} GARLIC!"
   },
   "results": {
-    "title": "REST IN PITA",
+    "title": "Rest in pita",
     "death": {
       "pickle": "Taken out by a pickle jar. Embarrassing.",
       "pita": "Tripped over a stack of pitas. Ironic.",
@@ -131,9 +131,9 @@
     "copied": "COPIED! SEND IT TO A FRIEND"
   },
   "claim": {
-    "titleOne": "CLAIM YOUR REWARD",
-    "titleMany": "CLAIM YOUR REWARDS",
-    "titleSave": "SAVE YOUR SCORE",
+    "titleOne": "Claim your reward",
+    "titleMany": "Claim your rewards",
+    "titleSave": "Save your score",
     "cta": "CLAIM MY REWARD",
     "ctaMany": "CLAIM MY REWARDS",
     "ctaSave": "SAVE MY SCORE",
@@ -142,7 +142,7 @@
     "emailHintSave": "We only use it for the leaderboard.",
     "nickname": "Nickname (optional)",
     "nicknameHint": "2–16 characters. Shown on the leaderboard. Blank gets you a food name.",
-    "reroll": "🎲 New name",
+    "reroll": "New name",
     "privacy": "Boustan uses your email to send your code and show your score, and sends offers only if you opt in. Your data may be processed outside Quebec. It is deleted 90 days after the campaign unless you opt in. <policy>Privacy policy</policy> · <officer>Privacy officer</officer>",
     "sending": "SENDING…",
     "recognized": "Send to {email}?",
@@ -170,8 +170,8 @@
     "withdrawn": "Unsubscribed from Boustan offers and news by email."
   },
   "coupon": {
-    "title": "YOUR CODE",
-    "titleMany": "YOUR CODES",
+    "title": "Your code",
+    "titleMany": "Your codes",
     "expires": "Expires {date}",
     "howTo": "Show this code at the counter or enter it in the Boustan app.",
     "fullTerms": "Full terms",
@@ -180,11 +180,11 @@
     "resend": "RESEND EMAIL",
     "resent": "EMAIL SENT",
     "copyLabel": "Copy code for {reward}",
-    "titleNone": "ALL GONE FOR NOW",
+    "titleNone": "All gone for now",
     "unavailable": "{reward}: all gone for now."
   },
   "lb": {
-    "title": "LEADERBOARD",
+    "title": "Leaderboard",
     "rank": "#",
     "name": "NAME",
     "garlic": "GARLIC",
@@ -198,7 +198,7 @@
     "caption": "Ranked by garlic, then fewest hits, then distance."
   },
   "myRewards": {
-    "title": "MY REWARDS",
+    "title": "My rewards",
     "empty": "No rewards yet."
   },
   "gate": {
@@ -228,6 +228,11 @@
     "unsubscribe": "Unsubscribe from offers",
     "contact": "Contact: {email}",
     "viewInvalid": "This link isn't valid."
+  },
+  "notFound": {
+    "title": "Page not found",
+    "body": "This page ran away. The chicken is still running.",
+    "cta": "Back to the game"
   },
   "unsubscribe": {
     "title": "You're unsubscribed",

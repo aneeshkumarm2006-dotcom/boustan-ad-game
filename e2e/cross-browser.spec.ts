@@ -1,6 +1,6 @@
 /**
  * Runs in every browser project (Chromium, Firefox, WebKit): the seeded level must match the
- * Node build exactly (NFR-09), and the pixel fonts must draw every French character (GAME-14).
+ * Node build exactly (NFR-09), and the brand fonts must draw every French character (GAME-14).
  */
 import { expect, test } from "@playwright/test";
 import golden from "../game-core/golden-digests.json";
@@ -28,22 +28,27 @@ test("the same seed builds the same level in the browser and in Node (NFR-09)", 
   }
 });
 
-test("the pixel fonts draw every French character (GAME-14)", async ({ page }) => {
+test("the brand fonts draw every French character (GAME-14)", async ({ page }) => {
   await page.goto("/?lang=fr");
   await stcReady(page);
-  await page.evaluate(() => document.fonts.ready);
-  const result = await page.evaluate(() => {
+  const result = await page.evaluate(async () => {
     const chars = "éèêëàâçîïôûùœÉÀÇ«»ÈÊÎÔÛŒ’";
-    const families = ["--font-pixel", "--font-mono"].map((v) =>
-      getComputedStyle(document.documentElement).getPropertyValue(v).trim(),
-    );
+    const vars = ["--font-display", "--font-condensed", "--font-body"];
+    const root = getComputedStyle(document.documentElement);
     const ctx = document.createElement("canvas").getContext("2d")!;
+    const families = vars.map((v) => root.getPropertyValue(v).trim());
     const out: Record<string, string[]> = {};
-    for (const family of families) {
-      // Both fonts are monospaced: a glyph from a fallback font would change the advance.
-      ctx.font = `32px ${family}`;
-      const em = ctx.measureText("M").width;
-      out[family] = [...chars].filter((c) => Math.abs(ctx.measureText(c).width - em) > 0.5);
+    for (const [i, list] of families.entries()) {
+      // The first entry is the brand font itself; the rest is next/font's fallback list.
+      const first = list.split(",")[0].trim();
+      await document.fonts.load(`32px ${first}`, chars);
+      out[vars[i]] = [...chars].filter((c) => {
+        ctx.font = `32px ${first}, serif`;
+        const withSerif = ctx.measureText(c).width;
+        ctx.font = `32px ${first}, monospace`;
+        // A glyph the font lacks is drawn by the fallback, so its advance changes with it.
+        return Math.abs(withSerif - ctx.measureText(c).width) > 0.5;
+      });
     }
     return { families, out };
   });

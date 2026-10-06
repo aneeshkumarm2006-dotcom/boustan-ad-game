@@ -6,7 +6,14 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-/** Shell for every /admin page, login included: the stylesheet and a scroll container. */
+/**
+ * Shell for every /admin page, login included: the stylesheet and a scroll container. The admin
+ * is English only, while the root layout declares the game's language (fr).
+ */
 export default function AdminShell({ children }: { children: React.ReactNode }) {
-  return <div className="adm">{children}</div>;
+  return (
+    <div className="adm" lang="en">
+      {children}
+    </div>
+  );
 }

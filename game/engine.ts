@@ -8,6 +8,8 @@
  * - Rewards unlock mid-run with a banner (GAME-02); milestones are by distance (GAME-05).
  * - Pause with a 3-2-1 countdown on resume (GAME-09). Paused time isn't counted.
  * - Canvas text comes from the i18n dictionaries and follows language switches mid-run.
+ * - The backing store is a whole multiple k of the 320 px logical canvas (see `fit`), so the
+ *   brand fonts and the logo are sharp. Game logic and every coordinate stay in logical px.
  */
 import {
   REWARD_IDS,
@@ -27,16 +29,25 @@ import {
   type RewardRules,
 } from "@/game-core";
 import type { Translator } from "@/i18n";
+import { PALETTE, alpha, mix } from "@/lib/brand";
+import type { CanvasFonts } from "./fonts";
 import { Sfx, type Sound } from "./audio";
 import {
-  BRAND,
+  SHADOW,
+  SKY,
+  SKY_CUTS,
   buildBackdrop,
   buildShops,
   buildSprites,
   glowSprite,
-  heatSprite,
+  makeStars,
+  meatSprites,
+  moonSprite,
+  plateSprite,
   type Backdrop,
+  type Layer,
   type Sprites,
+  type Star,
 } from "./scene";
 
 export type GameState = "title" | "play" | "paused" | "countdown" | "caught" | "over";
@@ -84,8 +95,8 @@ export interface GameOptions {
   /** Element that takes taps (canvas plus HUD). */
   frame: HTMLElement;
   hud: HudRefs;
-  /** CSS font-family list of the pixel font. */
-  font: string;
+  /** CSS font-family lists for text drawn on the canvas. */
+  fonts: CanvasFonts;
   translator: Translator;
   portrait: boolean;
   reducedMotion: boolean;
@@ -142,8 +153,31 @@ const { view, physics, heat: HEAT, obstacles: OB, speed: SPEED } = TUNING;
 const W = view.width;
 const BANNER_S = 1.5;
 const COUNTDOWN_S = 3;
-const CONFETTI = [BRAND.red, BRAND.cream, "#ffc93c", "#4cd07d", "#ffffff"];
-const MEAT = ["#8b4a1c", "#a85a22", "#c46f2c", "#7a3d15"];
+/** The backing store is at most this many times the logical size, and this many pixels. */
+const MAX_K = 6;
+const MAX_PIXELS = 2.1e6;
+/** Drawn past the canvas edge so a screen shake never shows the bare canvas. */
+const BLEED = 8;
+
+// Guide de style palette: Vert and Toum, Navet as the accent, the rest used with restraint.
+const { vert, toum, navet, hummus, poivron, tomate, avocat, laitue } = PALETTE;
+const CONFETTI = [navet, toum, avocat, hummus, laitue];
+const DUST = [mix(vert, toum, 0.3), mix(vert, toum, 0.2)];
+const FEATHERS = [toum, mix(toum, vert, 0.12), mix(toum, vert, 0.25)];
+const DIM = alpha(vert, 0.7);
+const SIDEWALK = mix(vert, toum, 0.16);
+const ROAD = mix(vert, "#000000", 0.35);
+/** Heat vignette: flat bands from the left edge, Tomate then Poivron, fading out. */
+const VIGNETTE = Array.from({ length: 8 }, (_, i) =>
+  alpha(i < 2 ? tomate : poivron, 0.34 * (1 - i / 8) ** 2),
+);
+const VIGNETTE_BAND = 12;
+const METAL = [
+  mix(toum, vert, 0.15),
+  mix(toum, vert, 0.3),
+  mix(toum, vert, 0.45),
+  mix(toum, vert, 0.6),
+];
 
 const rand = (a: number, b: number) => a + Math.random() * (b - a);
 const pick = <T>(items: readonly T[]): T => items[Math.floor(Math.random() * items.length)];
@@ -162,13 +196,25 @@ export class Game {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly sfx: Sfx;
   private readonly sprites: Sprites;
-  private readonly cupGlow = glowSprite(10, "255,220,120", 1);
-  private readonly spitGlow = glowSprite(48, "255,120,30", 0.32);
+  private readonly moon = moonSprite();
+  private readonly plate = plateSprite();
+  private readonly meat = meatSprites();
+  private readonly resizer: ResizeObserver;
+  private cupGlow!: HTMLCanvasElement;
+  private spitGlow!: HTMLCanvasElement;
   private t: Translator;
   private H = 0;
   private ground = 0;
+  /** Backing store pixels per logical pixel, and the devicePixelRatio it was chosen for. */
+  private k = 0;
+  private dpr = 0;
+  /** Highest k allowed: the frame-time watchdog steps it down on a slow canvas. */
+  private kMax = MAX_K;
+  /** Frame times (ms) and count in the watchdog's current window. */
+  private win = 0;
+  private winN = 0;
   private backdrop!: Backdrop;
-  private heatFx!: HTMLCanvasElement;
+  private stars: Star[] = [];
   private fontReady = false;
   private raf = 0;
   private last = 0;
@@ -230,20 +276,30 @@ export class Game {
   constructor(opts: GameOptions) {
     this.opts = opts;
     this.t = opts.translator;
-    const ctx = opts.canvas.getContext("2d");
+    // The scene covers every pixel, so the canvas can be opaque.
+    const ctx = opts.canvas.getContext("2d", { alpha: false });
     if (!ctx) throw new Error("2D canvas unavailable");
     this.ctx = ctx;
     this.sfx = new Sfx(opts.muted);
     this.sprites = buildSprites();
     this.layout(opts.portrait);
     opts.frame.dataset.running = "false";
+    this.resizer = new ResizeObserver(() => {
+      if (this.fit()) this.render();
+    });
+    this.resizer.observe(opts.frame);
 
     opts.frame.addEventListener("pointerdown", this.onPointerDown, { passive: false });
     window.addEventListener("keydown", this.onKeyDown);
-    const loadFont = document.fonts?.load(`8px ${opts.font}`);
+    // Both brand faces are single weights: the condensed one is 600, the display serif 400.
+    const { fonts } = opts;
     const ready = () => this.onFontReady();
-    if (loadFont) loadFont.then(ready, ready);
-    else ready();
+    if (document.fonts) {
+      Promise.all([
+        document.fonts.load(`600 8px ${fonts.condensed}`),
+        document.fonts.load(`400 8px ${fonts.display}`),
+      ]).then(ready, ready);
+    } else ready();
     setTimeout(ready, 2500);
 
     this.last = performance.now();
@@ -288,7 +344,7 @@ export class Game {
     });
     this.hudCache.dist = "";
     this.setState("play");
-    this.floatText(() => this.t.t("canvas.run"), W / 2, this.ground - 80, "#ffc93c", 16, 1);
+    this.floatText(() => this.t.t("canvas.run"), W / 2, this.ground - 80, avocat, 22, 1);
     this.play("start");
     this.updateHud();
   }
@@ -320,7 +376,7 @@ export class Game {
       c.vy = physics.doubleJump;
       c.jumps = 2;
       this.play("jump2");
-      this.burst(c.x + 4, c.y - 6, 5, ["#fff7e6", "#d8ccb6"], 40, 50, 0.6, 1);
+      this.burst(c.x + 4, c.y - 6, 5, FEATHERS.slice(0, 2), 40, 50, 0.6, 1);
     }
   }
 
@@ -345,6 +401,7 @@ export class Game {
   destroy(): void {
     this.destroyed = true;
     cancelAnimationFrame(this.raf);
+    this.resizer.disconnect();
     this.opts.frame.removeEventListener("pointerdown", this.onPointerDown);
     window.removeEventListener("keydown", this.onKeyDown);
   }
@@ -384,20 +441,40 @@ export class Game {
   private layout(portrait: boolean): void {
     this.H = portrait ? view.heightPortrait : view.heightLandscape;
     this.ground = this.H - view.groundOffset;
-    const { canvas } = this.opts;
-    canvas.width = W;
-    canvas.height = this.H;
-    this.ctx.imageSmoothingEnabled = false;
-    this.backdrop = buildBackdrop(W, this.H, this.ground);
-    this.heatFx = heatSprite(this.H);
+    this.stars = makeStars(W, this.ground);
     this.chick.y = this.ground;
-    if (this.fontReady) this.backdrop.shops = buildShops(this.H, this.ground, this.opts.font);
+    this.k = 0; // the canvas height changed: rebuild everything that depends on it
+    this.fit();
+  }
+
+  /**
+   * Makes the backing store a whole multiple k of the logical canvas: enough device pixels for
+   * the frame's on-screen width (capped by kMax and MAX_PIXELS), so type and the logo are
+   * crisp. Rebuilds what is drawn at k. Returns whether k changed.
+   */
+  private fit(): boolean {
+    const { canvas, frame, fonts } = this.opts;
+    const dpr = window.devicePixelRatio || 1;
+    this.dpr = dpr;
+    const cap = Math.floor(Math.sqrt(MAX_PIXELS / (W * this.H)));
+    const k = Math.max(1, Math.min(this.kMax, cap, Math.ceil((frame.clientWidth * dpr) / W)));
+    if (k === this.k) return false;
+    this.k = k;
+    canvas.width = W * k;
+    canvas.height = this.H * k;
+    canvas.dataset.logicalW = String(W);
+    canvas.dataset.logicalH = String(this.H);
+    this.backdrop = buildBackdrop(this.ground, k);
+    this.cupGlow = glowSprite(12, avocat, 1, k);
+    this.spitGlow = glowSprite(48, poivron, 0.3, k);
+    if (this.fontReady) this.backdrop.shops = buildShops(this.ground, fonts.condensed, k);
+    return true;
   }
 
   private onFontReady(): void {
     if (this.fontReady || this.destroyed) return;
     this.fontReady = true;
-    this.backdrop.shops = buildShops(this.H, this.ground, this.opts.font);
+    this.backdrop.shops = buildShops(this.ground, this.opts.fonts.condensed, this.k);
   }
 
   private setState(state: GameState): void {
@@ -478,7 +555,7 @@ export class Game {
   }
 
   private dust(x: number, y: number, n: number): void {
-    this.burst(x, y - 1, n, ["#6b5c96", "#4a3d73"], 30, -10, 0.4, 2);
+    this.burst(x, y - 1, n, DUST, 30, -10, 0.4, 2);
   }
 
   private floatText(
@@ -496,7 +573,25 @@ export class Game {
 
   private frame = (now: number): void => {
     if (this.destroyed) return;
-    const dt = Math.min(physics.maxFrameS, Math.max(0, (now - this.last) / 1000));
+    // Zooming or dragging to another screen changes the pixel ratio without resizing the frame.
+    if ((window.devicePixelRatio || 1) !== this.dpr) this.fit();
+    const gap = now - this.last;
+    // A slow canvas (software rendering, an old phone) gives up sharpness, not frames: if a
+    // 0.7 s window of play averages under ~36 fps, cut k to what the pixel cost allows (it grows
+    // with k squared).
+    if (this._state === "play" && gap < 250) {
+      this.win += gap;
+      this.winN++;
+      if (this.win > 700) {
+        const avg = this.win / this.winN;
+        this.win = this.winN = 0;
+        if (avg > 28 && this.k > 2) {
+          this.kMax = Math.max(2, Math.floor(this.k * Math.sqrt(24 / avg)));
+          this.fit();
+        }
+      }
+    }
+    const dt = Math.min(physics.maxFrameS, Math.max(0, gap / 1000));
     this.last = now;
     this.update(dt);
     this.render();
@@ -643,7 +738,7 @@ export class Game {
             g: -5,
             life: 0.5,
             max: 0.5,
-            c: "rgba(255,255,255,.6)",
+            c: alpha(toum, 0.6),
             s: 1,
             sway: 0,
           });
@@ -664,15 +759,8 @@ export class Game {
         cup.taken = true;
         this.garlic++;
         this.heat = Math.max(0, this.heat - HEAT.garlicCool);
-        this.burst(cup.x + 4, cup.y - 4, 8, ["#ffc93c", "#fff7e6", "#fff3c4"], 60, 0, 0.45, 1);
-        this.floatText(
-          () => this.t.t("canvas.garlicPlus"),
-          cup.x + 4,
-          cup.y - 12,
-          "#fff3c4",
-          8,
-          0.6,
-        );
+        this.burst(cup.x + 4, cup.y - 4, 8, [avocat, toum, toum], 60, 0, 0.45, 1);
+        this.floatText(() => this.t.t("canvas.garlicPlus"), cup.x + 4, cup.y - 12, avocat, 10, 0.6);
         this.play("pick");
       }
     }
@@ -692,14 +780,14 @@ export class Game {
     c.inv = HEAT.invulnerableS;
     this.shake = this.opts.reducedMotion ? 0 : 6;
     this.lastHit = { type, at: this.runTime };
-    this.burst(c.x + 8, c.y - 8, 14, ["#fff7e6", "#d8ccb6", "#ffffff"], 90, 120, 0.9, 2);
+    this.burst(c.x + 8, c.y - 8, 14, FEATHERS, 90, 120, 0.9, 2);
     const which = Math.floor(Math.random() * 4);
     this.floatText(
       () => this.t.list("canvas.hits")[which] ?? "!",
       c.x + 8,
       c.y - 24,
-      "#ff5c8a",
-      8,
+      toum,
+      10,
       0.8,
     );
     this.play("hit");
@@ -752,7 +840,7 @@ export class Game {
       const cokeAt = this.setup?.rules.free_coke.distanceM;
       if (m === cokeAt && unlockedNow.includes("free_coke")) continue; // the banner says it
       const idx = this.milestoneIdx;
-      this.floatText(() => this.milestoneText(m, idx), W / 2, this.ground - 102, "#4cd07d", 8, 1.6);
+      this.floatText(() => this.milestoneText(m, idx), W / 2, this.ground - 102, toum, 11, 1.6);
       this.play("mile");
     }
   }
@@ -793,17 +881,8 @@ export class Game {
     if (this.caughtT > 0.35 && c.visible) {
       c.visible = false;
       this.shake = this.opts.reducedMotion ? 0 : 5;
-      this.burst(
-        c.x + 8,
-        c.y - 8,
-        28,
-        ["#fff7e6", "#d8ccb6", "#ffffff", "#ff3b3b"],
-        120,
-        140,
-        1.2,
-        2,
-      );
-      this.burst(c.x + 8, c.y - 6, 10, ["rgba(200,190,220,.7)"], 30, -20, 0.8, 3);
+      this.burst(c.x + 8, c.y - 8, 28, [...FEATHERS, tomate], 120, 140, 1.2, 2);
+      this.burst(c.x + 8, c.y - 6, 10, [alpha(mix(toum, vert, 0.4), 0.7)], 30, -20, 0.8, 3);
       this.wrap = { x: c.x + 1, y: c.y - 30, vy: -80, b: 0 };
     }
     if (this.caughtT > 1.7) this.finish();
@@ -871,30 +950,63 @@ export class Game {
 
   // ---------- render ----------
 
-  private tile(c: HTMLCanvasElement, off: number): void {
-    const w = c.width;
-    const x = -Math.floor(off % w);
-    this.ctx.drawImage(c, x, 0);
-    if (x + w < W) this.ctx.drawImage(c, x + w, 0);
+  /** Draws a backdrop strip at its logical size, repeated to fill the width. */
+  private tile(l: Layer, off: number): void {
+    const x = -Math.floor(off % l.w);
+    for (let i = x > -BLEED ? x - l.w : x; i < W + BLEED; i += l.w) {
+      this.ctx.drawImage(l.c, i, l.y, l.w, l.h);
+    }
+  }
+
+  /** An étincelle (the brand's four-point star): arms `r` px long, a 3 x 3 core when r is 3. */
+  private spark(x: number, y: number, r: number): void {
+    const { ctx } = this;
+    ctx.fillRect(x - r, y, 2 * r + 1, 1);
+    ctx.fillRect(x, y - r, 1, 2 * r + 1);
+    if (r > 2) ctx.fillRect(x - 1, y - 1, 3, 3);
+  }
+
+  private drawSky(): void {
+    const { ctx, ground: g, T } = this;
+    // Flat bands down to the ground line (the ground covers the rest), each drawn once.
+    SKY.forEach((c, i) => {
+      const y = i ? Math.round(g * SKY_CUTS[i]) : -BLEED;
+      ctx.fillStyle = c;
+      ctx.fillRect(
+        -BLEED,
+        y,
+        W + 2 * BLEED,
+        (SKY_CUTS[i + 1] ? Math.round(g * SKY_CUTS[i + 1]) : g) - y,
+      );
+    });
+    ctx.drawImage(this.moon, W - 68, 20);
+    for (const s of this.stars) {
+      const a = Math.abs(Math.sin(T * s.sp + s.ph));
+      ctx.globalAlpha = 0.35 + 0.65 * a;
+      ctx.fillStyle = s.hot ? avocat : toum;
+      this.spark(s.x, s.y, s.r === 3 && a < 0.45 ? 2 : s.r === 2 && a < 0.3 ? 1 : s.r);
+    }
+    ctx.globalAlpha = 1;
   }
 
   private drawGround(): void {
     const { ctx, ground: g, H } = this;
     const d = this.viewDist;
-    ctx.fillStyle = "#2b2342";
-    ctx.fillRect(0, g, W, 14);
-    ctx.fillStyle = "#4a3d73";
-    ctx.fillRect(0, g, W, 1);
-    ctx.fillStyle = "#3a2f5c";
+    const w = W + 2 * BLEED;
+    ctx.fillStyle = SIDEWALK;
+    ctx.fillRect(-BLEED, g, w, 14);
+    ctx.fillStyle = mix(vert, toum, 0.26);
+    ctx.fillRect(-BLEED, g, w, 1);
+    ctx.fillStyle = mix(vert, toum, 0.08);
     const o = Math.floor(d % 22);
-    for (let x = -o; x < W; x += 22) ctx.fillRect(x, g + 1, 1, 13);
-    ctx.fillStyle = "#5b4c8a";
-    ctx.fillRect(0, g + 14, W, 2);
-    ctx.fillStyle = "#15112a";
-    ctx.fillRect(0, g + 16, W, H - g - 16);
-    ctx.fillStyle = "#ffc93c";
+    for (let x = -o; x < W + BLEED; x += 22) ctx.fillRect(x, g + 1, 1, 13);
+    ctx.fillStyle = toum;
+    ctx.fillRect(-BLEED, g + 14, w, 2);
+    ctx.fillStyle = ROAD;
+    ctx.fillRect(-BLEED, g + 16, w, H - g - 16 + BLEED);
+    ctx.fillStyle = toum;
     const o2 = Math.floor(d % 34);
-    for (let x = -o2; x < W; x += 34) ctx.fillRect(x, g + 22, 14, 2);
+    for (let x = -o2; x < W + BLEED; x += 34) ctx.fillRect(x, g + 22, 14, 2);
   }
 
   private drawObstacle(o: ActiveObstacle): void {
@@ -902,46 +1014,47 @@ export class Game {
     const x = Math.round(o.x);
     const y = Math.round(o.y);
     switch (o.spawn.type) {
-      case "pickle":
-        ctx.fillStyle = "#c9a227";
+      case "pickle": {
+        // A jar of pickled turnips (Navet is named after them): Toum glass, Hummus lid.
+        ctx.fillStyle = hummus;
         ctx.fillRect(x + 1, y - 17, 10, 3);
-        ctx.fillStyle = "#ecd060";
+        ctx.fillStyle = toum;
         ctx.fillRect(x + 1, y - 17, 10, 1);
-        ctx.fillStyle = "#bfe6ee";
         ctx.fillRect(x, y - 14, 12, 14);
-        ctx.fillStyle = "#ff5c8a";
+        ctx.fillStyle = navet;
         ctx.fillRect(x + 1, y - 12, 10, 11);
-        ctx.fillStyle = "#ffa3c0";
+        ctx.fillStyle = mix(navet, toum, 0.45);
         ctx.fillRect(x + 2, y - 11, 3, 2);
         ctx.fillRect(x + 6, y - 8, 3, 2);
         ctx.fillRect(x + 3, y - 5, 3, 2);
-        ctx.fillStyle = "rgba(255,255,255,.6)";
+        ctx.fillStyle = mix(navet, toum, 0.7);
         ctx.fillRect(x + 1, y - 13, 1, 11);
         break;
+      }
       case "pita":
         for (let i = 0; i < 3; i++) {
           const yy = y - 3 - i * 3;
-          ctx.fillStyle = "#c98f45";
+          ctx.fillStyle = mix(hummus, vert, 0.3);
           ctx.fillRect(x + 1, yy, 18, 3);
-          ctx.fillStyle = "#ecc27e";
+          ctx.fillStyle = hummus;
           ctx.fillRect(x + 2, yy, 16, 2);
-          ctx.fillStyle = "#f7dca8";
+          ctx.fillStyle = mix(hummus, toum, 0.6);
           ctx.fillRect(x + 4 + i * 2, yy, 6, 1);
-          ctx.fillStyle = "#a8702f";
+          ctx.fillStyle = mix(hummus, vert, 0.5);
           ctx.fillRect(x + 12 - i, yy + 1, 1, 1);
         }
         break;
       case "sauce":
-        ctx.fillStyle = "#2d9b55";
+        ctx.fillStyle = laitue;
         ctx.fillRect(x + 2, y - 19, 3, 3);
-        ctx.fillStyle = "#e2231a";
+        ctx.fillStyle = tomate;
         ctx.fillRect(x + 2, y - 16, 3, 3);
         ctx.fillRect(x, y - 13, 7, 13);
-        ctx.fillStyle = "#fff7e6";
+        ctx.fillStyle = toum;
         ctx.fillRect(x + 1, y - 9, 5, 4);
-        ctx.fillStyle = "#e2231a";
+        ctx.fillStyle = tomate;
         ctx.fillRect(x + 3, y - 8, 1, 2);
-        ctx.fillStyle = "rgba(255,255,255,.45)";
+        ctx.fillStyle = mix(tomate, toum, 0.45);
         ctx.fillRect(x + 1, y - 12, 1, 3);
         break;
       case "falafel":
@@ -952,10 +1065,10 @@ export class Game {
         ctx.restore();
         break;
       case "potato":
-        // Red motion streak behind it: a hazard, not a pickup (GAME-11).
-        ctx.fillStyle = "rgba(255,59,59,.55)";
-        ctx.fillRect(x + 9, y - 6, 4, 1);
-        ctx.fillRect(x + 10, y - 3, 5, 1);
+        // Tomate motion streak behind it: a hazard, not a pickup (GAME-11).
+        ctx.fillStyle = tomate;
+        ctx.fillRect(x + 9, y - 6, 5, 1);
+        ctx.fillRect(x + 10, y - 3, 6, 1);
         ctx.drawImage(this.sprites.potato, x, y - 8);
         break;
     }
@@ -966,36 +1079,40 @@ export class Game {
     const bob = Math.round(Math.sin(T * 5 + cup.ph) * 1.5);
     const x = Math.round(cup.x);
     const y = Math.round(cup.y) + bob;
-    ctx.globalAlpha = 0.33 + 0.12 * Math.sin(T * 6 + cup.ph);
-    ctx.drawImage(this.cupGlow, x - 6, y - 14);
+    ctx.globalAlpha = 0.7 + 0.2 * Math.sin(T * 6 + cup.ph);
+    ctx.drawImage(this.cupGlow, x - 8, y - 16, 24, 24);
+    ctx.globalAlpha = 0.85;
+    ctx.drawImage(this.plate, x - 3, y - 11);
     ctx.globalAlpha = 1;
     ctx.drawImage(this.sprites.cup, x, y - 8);
-    if (Math.floor(T * 4 + cup.ph) % 3 === 0) {
-      ctx.fillStyle = "#fff";
-      ctx.fillRect(x + 7, y - 10, 1, 1);
+    // Étincelle twinkle: big, small, off.
+    const twinkle = Math.floor(T * 4 + cup.ph) % 3;
+    if (twinkle < 2) {
+      ctx.fillStyle = toum;
+      this.spark(x + 8, y - 9, twinkle === 0 ? 3 : 2);
     }
   }
 
   private wheel(wx: number, wy: number): void {
     const { ctx } = this;
-    ctx.fillStyle = "#1d1e24";
+    ctx.fillStyle = mix(vert, "#000000", 0.5);
     ctx.fillRect(wx - 3, wy - 3, 6, 6);
     ctx.fillRect(wx - 2, wy - 4, 4, 8);
     ctx.fillRect(wx - 4, wy - 2, 8, 4);
     const dx = Math.round(Math.cos(this.wheelRot) * 2);
     const dy = Math.round(Math.sin(this.wheelRot) * 2);
-    ctx.fillStyle = "#8a8f9c";
+    ctx.fillStyle = METAL[2];
     ctx.fillRect(wx + dx, wy + dy, 1, 1);
     ctx.fillRect(wx - dx, wy - dy, 1, 1);
-    ctx.fillStyle = "#c9ced8";
+    ctx.fillStyle = METAL[0];
     ctx.fillRect(wx, wy, 1, 1);
   }
 
   private eye(ex: number, ey: number): void {
     const { ctx } = this;
-    ctx.fillStyle = "#fff7e6";
+    ctx.fillStyle = toum;
     ctx.fillRect(ex, ey, 5, 4);
-    ctx.fillStyle = "#1a1020";
+    ctx.fillStyle = vert;
     ctx.fillRect(ex + 3, ey + 1, 2, 2);
   }
 
@@ -1005,45 +1122,35 @@ export class Game {
     const frozen = over || this._state === "paused" || this._state === "countdown";
     const x = Math.round(this.spitX);
     const y = this.ground + (frozen ? 0 : Math.round(Math.sin(T * 22) * 0.7));
-    ctx.drawImage(this.spitGlow, x - 32, y - 82);
-    ctx.fillStyle = "#4b4f5c";
+    ctx.drawImage(this.spitGlow, x - 32, y - 82, 96, 96);
+    ctx.fillStyle = METAL[3];
     ctx.fillRect(x + 2, y - 11, 28, 5);
-    ctx.fillStyle = "#6b7080";
+    ctx.fillStyle = METAL[2];
     ctx.fillRect(x + 2, y - 11, 28, 1);
     this.wheel(x + 8, y - 3);
     this.wheel(x + 24, y - 3);
-    ctx.fillStyle = "#a7adb8";
+    ctx.fillStyle = METAL[1];
     ctx.fillRect(x + 15, y - 68, 2, 58);
-    ctx.fillStyle = "#2b2d35";
+    ctx.fillStyle = mix(vert, "#000000", 0.4);
     ctx.fillRect(x - 1, y - 60, 2, 48);
     ctx.globalAlpha = 0.7 + Math.random() * 0.3;
-    ctx.fillStyle = "#ff5a1a";
+    ctx.fillStyle = tomate;
     ctx.fillRect(x + 1, y - 58, 3, 44);
-    ctx.fillStyle = "#ffb02e";
+    ctx.fillStyle = poivron;
     ctx.fillRect(x + 2, y - 56 + (Math.floor(T * 40) % 40), 1, 3);
     ctx.globalAlpha = 1;
     const top = y - 60;
-    const rows = 46;
-    for (let r = 0; r < rows; r++) {
-      const w = Math.round(26 - (r / (rows - 1)) * 12);
-      const lx = x + 16 - (w >> 1);
-      ctx.fillStyle = MEAT[(Math.floor(r / 2) + Math.floor(T * 14)) & 3];
-      ctx.fillRect(lx, top + r, w, 1);
-      ctx.fillStyle = "rgba(0,0,0,0.3)";
-      ctx.fillRect(lx, top + r, Math.ceil(w * 0.22), 1);
-      ctx.fillStyle = "rgba(255,210,140,0.22)";
-      ctx.fillRect(lx + Math.floor(w * 0.58), top + r, Math.ceil(w * 0.14), 1);
-    }
-    ctx.fillStyle = "#e8352b";
+    ctx.drawImage(this.meat[Math.floor(T * 14) & 3], x + 3, top);
+    ctx.fillStyle = tomate;
     ctx.fillRect(x + 11, top - 3, 10, 3);
-    ctx.fillStyle = "#ff6b5a";
+    ctx.fillStyle = mix(tomate, toum, 0.3);
     ctx.fillRect(x + 12, top - 3, 8, 1);
-    ctx.fillStyle = "#f3e6c8";
+    ctx.fillStyle = toum;
     ctx.fillRect(x + 13, top - 5, 6, 2);
     const ey = top + 12;
     this.eye(x + 8, ey);
     this.eye(x + 18, ey);
-    ctx.fillStyle = "#2a1208";
+    ctx.fillStyle = vert;
     ctx.fillRect(x + 7, ey - 3, 3, 1);
     ctx.fillRect(x + 10, ey - 2, 3, 1);
     ctx.fillRect(x + 21, ey - 3, 3, 1);
@@ -1056,7 +1163,7 @@ export class Game {
       ctx.fillRect(x + 11, ey + 7, 10, 1);
       ctx.fillRect(x + 10, ey + 6, 1, 1);
       ctx.fillRect(x + 21, ey + 6, 1, 1);
-      ctx.fillStyle = "#fff7e6";
+      ctx.fillStyle = toum;
       ctx.fillRect(x + 12, ey + 6, 1, 1);
       ctx.fillRect(x + 19, ey + 6, 1, 1);
     }
@@ -1067,7 +1174,7 @@ export class Game {
     if (!c.visible) return;
     const hgt = g - c.y;
     const sw = Math.max(4, Math.round(12 - hgt / 6));
-    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.fillStyle = SHADOW;
     ctx.fillRect(Math.round(c.x + 8 - sw / 2), g + 1, sw, 2);
     if (c.inv > 0 && Math.floor(c.inv * 16) % 2 === 0) return;
     const fr = !c.onGround
@@ -1079,25 +1186,39 @@ export class Game {
     const y = Math.round(c.y) - 16;
     ctx.drawImage(fr, x, y);
     if ((this._state === "title" || this.heat > 1.4) && Math.floor(T * 6) % 2 === 0) {
-      ctx.fillStyle = "#7fd4ff";
+      ctx.fillStyle = toum;
       ctx.fillRect(x + 7, y + 1, 1, 2);
       ctx.fillRect(x + 6, y + 2, 1, 1);
     }
   }
 
-  /** Pixel text with a 1 px shadow, shrunk until it fits `maxW`. */
-  private text(str: string, x: number, y: number, size: number, color: string, maxW = W - 8): void {
-    const { ctx } = this;
-    let s = size;
-    ctx.font = `${s}px ${this.opts.font}`;
-    while (s > 5 && ctx.measureText(str).width > maxW) {
-      s--;
-      ctx.font = `${s}px ${this.opts.font}`;
-    }
-    ctx.fillStyle = "#000";
-    ctx.fillText(str, Math.round(x) + 1, Math.round(y) + 1);
+  /**
+   * Text in the brand's condensed face (or the display serif), shrunk until it fits `maxW`, with
+   * a hard 1 px Vert offset for legibility: the guide has no blurred shadows. Callers set
+   * textAlign and textBaseline; the position snaps to device pixels so it stays crisp.
+   */
+  private text(
+    str: string,
+    x: number,
+    y: number,
+    size: number,
+    color: string,
+    maxW = W - 8,
+    display = false,
+  ): void {
+    const { ctx, k } = this;
+    const { fonts } = this.opts;
+    const font = (s: number) =>
+      display ? `400 ${s}px ${fonts.display}` : `600 ${s}px ${fonts.condensed}`;
+    ctx.font = font(size);
+    const w = ctx.measureText(str).width;
+    if (w > maxW) ctx.font = font(Math.max(5, Math.floor((size * maxW) / w)));
+    const px = Math.round(x * k) / k;
+    const py = Math.round(y * k) / k;
+    ctx.fillStyle = vert;
+    ctx.fillText(str, px + 1, py + 1);
     ctx.fillStyle = color;
-    ctx.fillText(str, Math.round(x), Math.round(y));
+    ctx.fillText(str, px, py);
   }
 
   private drawBanner(): void {
@@ -1111,36 +1232,36 @@ export class Game {
     const cy = Math.round(this.H * 0.3);
     const h = 24;
     ctx.globalAlpha = Math.min(1, b.life / 0.25);
-    ctx.fillStyle = "#000";
-    ctx.fillRect(offset, cy - h / 2 - 2, W, h + 4);
-    ctx.fillStyle = BRAND.red;
+    ctx.fillStyle = SHADOW;
+    ctx.fillRect(offset, cy - h / 2 + 3, W, h);
+    ctx.fillStyle = navet;
     ctx.fillRect(offset, cy - h / 2, W, h);
-    ctx.fillStyle = BRAND.cream;
+    ctx.fillStyle = toum;
     ctx.fillRect(offset, cy - h / 2 + 2, W, 1);
     ctx.fillRect(offset, cy + h / 2 - 3, W, 1);
+    // Reward icons on Vert discs, like pickups, so a Tomate can still reads on Navet.
     const icon = b.reward === "free_coke" ? this.sprites.can : this.sprites.cup;
-    ctx.drawImage(icon, offset + 8, cy - (icon.height >> 1));
-    ctx.drawImage(icon, offset + W - 8 - icon.width, cy - (icon.height >> 1));
+    for (const ix of [offset + 6, offset + W - 6 - 14]) {
+      ctx.drawImage(this.plate, ix, cy - 7);
+      ctx.drawImage(icon, ix + 3, cy - (icon.height >> 1));
+    }
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    this.text(b.text(), offset + W / 2, cy + 1, 8, "#ffffff", W - 44);
+    this.text(b.text(), offset + W / 2, cy + 1, 10, toum, W - 44);
     ctx.globalAlpha = 1;
   }
 
   private render(): void {
-    const { ctx, H, T } = this;
+    const { ctx, H, k } = this;
     const bd = this.backdrop;
+    // Resizing the canvas resets the context, so start every frame from known state.
+    ctx.setTransform(k, 0, 0, k, 0, 0);
+    ctx.imageSmoothingEnabled = false;
     ctx.save();
     if (this.shake > 0) {
       ctx.translate(Math.round(rand(-1, 1) * this.shake), Math.round(rand(-1, 1) * this.shake));
     }
-    ctx.drawImage(bd.sky, 0, 0);
-    ctx.fillStyle = "#fff7e6";
-    for (const s of bd.stars) {
-      ctx.globalAlpha = 0.35 + 0.65 * Math.abs(Math.sin(T * s.sp + s.ph));
-      ctx.fillRect(s.x, s.y, 1, 1);
-    }
-    ctx.globalAlpha = 1;
+    this.drawSky();
     this.tile(bd.mount, this.viewDist * 0.03);
     this.tile(bd.skyline, this.viewDist * 0.15);
     if (bd.shops) this.tile(bd.shops, this.viewDist * 0.45);
@@ -1158,9 +1279,13 @@ export class Game {
     }
     ctx.globalAlpha = 1;
     const state = this._state;
-    if (state !== "title" && state !== "over") {
-      ctx.globalAlpha = Math.min(1, this.heat / HEAT.max);
-      ctx.drawImage(this.heatFx, 0, 0);
+    const hot = Math.min(1, this.heat / HEAT.max);
+    if (hot > 0.03 && state !== "title" && state !== "over") {
+      ctx.globalAlpha = hot;
+      VIGNETTE.forEach((c, i) => {
+        ctx.fillStyle = c;
+        ctx.fillRect(i ? i * VIGNETTE_BAND : -BLEED, 0, VIGNETTE_BAND + (i ? 0 : BLEED), H);
+      });
       ctx.globalAlpha = 1;
     }
     if (this.fontReady) {
@@ -1174,12 +1299,20 @@ export class Game {
     }
     this.drawBanner();
     if (state === "paused" || state === "countdown") {
-      ctx.fillStyle = "rgba(8,6,20,.55)";
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = DIM;
+      ctx.fillRect(-BLEED, -BLEED, W + 2 * BLEED, H + 2 * BLEED);
       if (state === "countdown" && this.fontReady) {
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        this.text(String(Math.ceil(this.countdown)), W / 2, Math.round(H * 0.42), 24, "#ffc93c");
+        this.text(
+          String(Math.ceil(this.countdown)),
+          W / 2,
+          Math.round(H * 0.42),
+          44,
+          avocat,
+          W,
+          true,
+        );
       }
     }
     ctx.restore();
