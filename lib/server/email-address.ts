@@ -1,6 +1,6 @@
 /**
- * Server-side email checks for claims (RWD-05, DATA-04): shape, disposable domains, and the
- * normalized form that enforces one claim per person per reward.
+ * Server-side email checks for saving a score (SEC-07, DATA-04): shape, disposable domains, and
+ * the normalized form that keeps one player per person.
  */
 import { z } from "zod";
 import { looksLikeEmail, normalizeEmail } from "@/lib/email";

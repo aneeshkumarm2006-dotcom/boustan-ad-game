@@ -12,8 +12,9 @@ const body = z.object({
 });
 
 /**
- * POST /api/runs/:id/finish → {valid, unlocked[], claimToken, best, rankPreview} (SEC-02 to
- * SEC-04). A run that fails any check gets `valid: false` and nothing else (SEC-03).
+ * POST /api/runs/:id/finish → {valid, points, saveToken, best, rankPreview, rank} (SEC-02 to
+ * SEC-04). The server scores the run (1 point per metre, 10 per garlic). A run that fails any
+ * check gets `valid: false` and nothing else (SEC-03).
  */
 export const POST = withErrors(
   "run_finish",

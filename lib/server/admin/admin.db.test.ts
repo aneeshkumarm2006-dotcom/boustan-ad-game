@@ -1,693 +1,773 @@
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { newEvent, newPlayer, newRun, type EventDoc } from "@/db/schema";
+import { TUNING, createLevel, distanceMAt } from "@/game-core";
 import { parseCsv } from "@/lib/csv";
 import {
-  BOTH,
-  NOTHING,
-  addCodes,
+  GOOD,
+  SHORT,
+  addRanked,
   connect,
   finish,
+  pointsFor,
   resetDb,
+  save,
   seedCampaign,
-  takeCodes,
+  type HonestRun,
 } from "@/tests/db";
-import { clearBoardCache, rankOfPlayer, topEntries } from "../leaderboard";
-import { claimRewards } from "../claims";
-import { audit } from "./audit";
-import { claimersCsv } from "./export";
+import { montrealDay, recordServerEvent, rollupEvents } from "../analytics";
+import { consentText } from "../consent";
+import { rankOfPlayer, topEntries } from "../leaderboard";
+import { FUNNEL_STEPS, emptyFunnel, funnel, health, sumFunnel } from "./dashboard";
+import { PLAYER_COLUMNS, playersCsv, type PlayersCsvOptions } from "./export";
+import { boardForModeration, flagSummary, flaggedRuns, winnerIds, winners } from "./moderation";
 import {
   erasePlayer,
   exportPlayer,
   playerDetail,
-  queueCouponResend,
   renamePlayer,
   searchPlayers,
   setHidden,
 } from "./players";
-import { importCodes, markRedeemed, poolStats, setPoolAlerts } from "./pools";
-import { runRetention, retentionDue } from "./retention";
+import { RETENTION_ACTOR, purgeDate, retentionDue, runRetention } from "./retention";
 import { loadSettings, saveSettings, toForm, validateSettings } from "./settings";
-import { runStockAlerts } from "./stock-alerts";
-import type { OutgoingEmail } from "../email/sender";
 
 const { db, close } = connect();
 afterAll(close);
 beforeEach(async () => {
   await resetDb(db);
-  await seedCampaign(db, { codesPerReward: 10 });
-  clearBoardCache();
+  await seedCampaign(db);
 });
+
+const NOBODY = "00000000-0000-4000-8000-000000000000";
+const DAY = 86_400_000;
 
 let seed = 100;
-async function claimPlayer(email: string, opts: { optIn?: boolean; nickname?: string } = {}) {
-  const run = await finish(db, BOTH(seed++));
-  const res = await claimRewards(
-    db,
-    {
-      claimToken: run.claimToken!,
-      email,
-      nickname: opts.nickname,
-      lang: "en",
-      termsAge: true,
-      marketingOptIn: opts.optIn ?? false,
-      src: "partner-a",
-      utm: { utm_campaign: "launch" },
-    },
-    { ip: "203.0.113.9", userAgent: "vitest-agent", now: new Date() },
-  );
-  if (!res.ok) throw new Error(`claim failed: ${res.error}`);
-  return res;
+/** A player who played a run and saved it with this email, through the real services. */
+async function savedPlayer(
+  email: string,
+  extra: { nickname?: string; marketingOptIn?: boolean; lang?: "fr" | "en" } = {},
+  run: HonestRun = GOOD(seed++),
+) {
+  const finished = await finish(db, run);
+  const saved = await save(db, finished, email, extra);
+  return { ...saved, run, runId: finished.runId };
 }
 
-describe("code pool import (RWD-02)", () => {
-  it("imports new codes, trims, de-dupes, rejects existing ones and summarizes", async () => {
-    const csv = [
-      "code,expires_at,batch",
-      "NEW-1,,b1",
-      " NEW-2 ,,b1",
-      "NEW-1,,b1",
-      "C-COKE-0000,,b1",
-      "x,,",
-    ].join("\n");
-    const res = await importCodes(db, "free_coke", csv);
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.summary).toMatchObject({
-      rows: 5,
-      imported: 2,
-      duplicatesInFile: 1,
-      alreadyExist: 1,
-      inOtherPool: 0,
-    });
-    expect(res.summary.invalid).toEqual([{ line: 6, value: "x", reason: "format" }]);
-    const rows = await db.codes.find({ rewardId: "free_coke" }).toArray();
-    expect(rows).toHaveLength(12);
-    expect(rows.find((r) => r.code === "NEW-2")?.batch).toBe("b1");
-  });
-
-  it("flags a code that already sits in the other reward's pool, and leaves it there", async () => {
-    const res = await importCodes(db, "free_coke", "C-GARL-0000\nFRESH-1\n");
-    expect(res.ok && res.summary).toMatchObject({ imported: 1, alreadyExist: 1, inOtherPool: 1 });
-    const row = (await db.codes.findOne({ code: "C-GARL-0000" }))!;
-    expect(row.rewardId).toBe("free_garlic_sauce");
-  });
-
-  it("names the batch when the file doesn't, and refuses an unknown reward or an empty file", async () => {
-    const res = await importCodes(db, "free_coke", "ONLY-1\n", {
-      now: new Date("2026-10-15T14:30:00Z"),
-    });
-    expect(res.ok && res.summary.batch).toBe("import-202610151430");
-    const row = (await db.codes.findOne({ code: "ONLY-1" }))!;
-    expect(row.batch).toBe("import-202610151430");
-    expect(await importCodes(db, "free_pizza", "A-1\n")).toEqual({
-      ok: false,
-      error: "unknown_reward",
-    });
-    expect(await importCodes(db, "free_coke", "code\n")).toEqual({ ok: false, error: "empty" });
-  });
-
-  it("keeps a code's own expiry date from the file", async () => {
-    await importCodes(db, "free_coke", "code,expires_at\nDATED-1,2026-11-15\n");
-    const row = (await db.codes.findOne({ code: "DATED-1" }))!;
-    // The end of the 15th, Montréal time.
-    expect(row.expiresAt?.toISOString()).toBe("2026-11-16T04:59:00.000Z");
-  });
-
-  it("imports a large file in chunks", async () => {
-    const lines = Array.from({ length: 5000 }, (_, i) => `BULK-${String(i).padStart(5, "0")}`);
-    const res = await importCodes(db, "free_garlic_sauce", lines.join("\n"));
-    expect(res.ok && res.summary.imported).toBe(5000);
-  });
-
-  it("issues imported codes in the order the file lists them", async () => {
-    const lines = Array.from({ length: 50 }, (_, i) => `ORDER-${String(i).padStart(3, "0")}`);
-    await db.codes.deleteMany({});
-    await importCodes(db, "free_coke", lines.join("\n"));
-    const oldest = await db.codes
-      .find({ rewardId: "free_coke", status: "available" })
-      .sort({ _id: 1 })
-      .limit(3)
-      .toArray();
-    expect(oldest.map((c) => c.code)).toEqual(["ORDER-000", "ORDER-001", "ORDER-002"]);
-  });
-
-  it("two imports of the same file at once add each code once", async () => {
-    const csv = Array.from({ length: 300 }, (_, i) => `RACE-${i}`).join("\n");
-    const [a, b] = await Promise.all([
-      importCodes(db, "free_coke", csv),
-      importCodes(db, "free_coke", csv),
-    ]);
-    expect(a.ok && b.ok).toBe(true);
-    const imported = (a.ok ? a.summary.imported : 0) + (b.ok ? b.summary.imported : 0);
-    expect(imported).toBe(300);
-    const rows = await db.codes.find({ code: { $regex: "^RACE-" } }).toArray();
-    expect(rows).toHaveLength(300);
-  });
-
-  it("reports counts by status and the redemption rate", async () => {
-    await claimPlayer("a@example.com");
-    const before = await poolStats(db);
-    const coke = before.find((p) => p.reward === "free_coke")!;
-    expect(coke).toMatchObject({ total: 10, available: 9, assigned: 1, redeemed: 0 });
-    expect(coke.redemptionRate).toBe(0);
-    const assigned = (await db.codes.findOne({ status: "assigned" }))!;
-    const res = await markRedeemed(db, `code,redeemed_at\n${assigned.code},2026-10-16T12:00\n`);
-    expect(res.ok && res.summary.marked).toBe(1);
-    const after = (await poolStats(db)).find((p) => p.reward === assigned.rewardId)!;
-    expect(after.redeemed).toBe(1);
-    expect(after.redemptionRate).toBe(1);
-  });
-
-  it("counts codes past their own expiry apart from the ones that can still be issued", async () => {
-    await db.codes.updateMany(
-      { rewardId: "free_coke", code: { $in: ["C-COKE-0000", "C-COKE-0001"] } },
-      { $set: { expiresAt: new Date(Date.now() - 86_400_000) } },
-    );
-    await db.codes.updateOne(
-      { code: "C-COKE-0002" },
-      { $set: { expiresAt: new Date(Date.now() + 86_400_000) } },
-    );
-    const coke = (await poolStats(db)).find((p) => p.reward === "free_coke")!;
-    expect(coke).toMatchObject({ total: 10, available: 8, expiredAvailable: 2 });
-  });
-});
-
-describe("uEat redeemed report (ADM-08)", () => {
-  it("marks issued codes, and counts repeats, unissued and unknown codes", async () => {
-    await claimPlayer("a@example.com");
-    const issued = await db.codes.find({ status: "assigned" }).sort({ _id: 1 }).toArray();
-    expect(issued).toHaveLength(2);
-    const csv = [
-      "code",
-      issued[0].code,
-      issued[0].code,
-      issued[1].code,
-      "C-COKE-0009",
-      "NOPE-1",
-      "!",
-    ].join("\n");
-    const res = await markRedeemed(db, csv);
-    expect(res.ok && res.summary).toEqual({
-      rows: 6,
-      marked: 2,
-      alreadyRedeemed: 0,
-      notIssued: 1,
-      unknown: 1,
-      invalid: 1,
-    });
-    const again = await markRedeemed(db, `code\n${issued[0].code}\n`);
-    expect(again.ok && again.summary.alreadyRedeemed).toBe(1);
-  });
-});
-
-describe("low-stock emails (RWD-04)", () => {
-  const sent: OutgoingEmail[] = [];
-  const send = async (e: OutgoingEmail) => {
-    sent.push(e);
-    return { id: "t" };
-  };
-  beforeEach(async () => {
-    sent.length = 0;
-    await db.campaignSettings.updateOne(
-      {},
-      { $set: { alertEmails: ["ops@example.com", "boss@example.com"] } },
-    );
-  });
-
-  it("sends nothing while stock is healthy", async () => {
-    await runStockAlerts(db, send);
-    expect(sent).toEqual([]);
-  });
-
-  it("announces each threshold once, to every recipient", async () => {
-    await takeCodes(db, "free_coke", 8); // 2 of 10 left: 20%
-    const first = await runStockAlerts(db, send);
-    expect(first.find((r) => r.reward === "free_coke")?.announced).toBe(20);
-    expect(sent.map((e) => e.to).sort()).toEqual(["boss@example.com", "ops@example.com"]);
-    expect(sent[0].subject).toContain("2 left");
-    expect(sent[0].text).toContain("/admin/codes");
-
-    await runStockAlerts(db, send);
-    expect(sent).toHaveLength(2); // same level, no repeat
-
-    await takeCodes(db, "free_coke", 1); // 1 of 10 left: 10%, still the 20 level
-    await runStockAlerts(db, send);
-    expect(sent).toHaveLength(2);
-
-    await takeCodes(db, "free_coke", 1); // none left: 5% level
-    const last = await runStockAlerts(db, send);
-    expect(last.find((r) => r.reward === "free_coke")?.announced).toBe(5);
-    expect(sent).toHaveLength(4);
-  });
-
-  it("re-arms after codes are added", async () => {
-    await takeCodes(db, "free_coke", 9);
-    await runStockAlerts(db, send);
-    expect(sent).toHaveLength(2);
-    await addCodes(db, "free_coke", 100, "MORE");
-    await runStockAlerts(db, send);
-    const coke = (await db.rewards.findOne({ _id: "free_coke" }))!;
-    expect(coke.alertLevel).toBeNull();
-    await db.codes.updateMany({ code: { $regex: "^MORE-" } }, { $set: { status: "void" } });
-    await runStockAlerts(db, send);
-    expect(sent.length).toBeGreaterThan(2);
-  });
-
-  it("uses the thresholds an admin sets, and falls back to ADMIN_EMAILS when no recipients are set", async () => {
-    await setPoolAlerts(db, "free_garlic_sauce", [60]);
-    await db.campaignSettings.updateOne({}, { $set: { alertEmails: [] } });
-    process.env.ADMIN_EMAILS = "owner@example.com";
-    const { resetEnvForTests } = await import("../env");
-    resetEnvForTests();
-    try {
-      await takeCodes(db, "free_garlic_sauce", 5); // 50% left
-      await runStockAlerts(db, send);
-      expect(sent.map((e) => e.to)).toEqual(["owner@example.com"]);
-    } finally {
-      delete process.env.ADMIN_EMAILS;
-      resetEnvForTests();
-    }
-  });
-
-  it("keeps trying when the email fails", async () => {
-    await takeCodes(db, "free_coke", 9);
-    const failing = async () => {
-      throw new Error("provider down");
-    };
-    const res = await runStockAlerts(db, failing);
-    expect(res.find((r) => r.reward === "free_coke")?.announced).toBeNull();
-    const coke = (await db.rewards.findOne({ _id: "free_coke" }))!;
-    expect(coke.alertLevel).toBeNull();
-    await runStockAlerts(db, send);
-    expect(sent.length).toBeGreaterThan(0);
-  });
-});
-
-describe("players (ADM-04)", () => {
-  it("searches by email or nickname, literally, and shows claim counts", async () => {
-    await claimPlayer("marie.tremblay@example.com", { nickname: "Marie T" });
-    await claimPlayer("omar@example.com", { nickname: "Omar 100" });
-    expect((await searchPlayers(db, "tremblay")).map((p) => p.nickname)).toEqual(["Marie T"]);
-    expect((await searchPlayers(db, "OMAR")).map((p) => p.email)).toEqual(["omar@example.com"]);
-    expect((await searchPlayers(db, "100")).map((p) => p.nickname)).toEqual(["Omar 100"]);
-    expect(await searchPlayers(db, "%")).toHaveLength(0); // % is not a wildcard
-    expect(await searchPlayers(db, ".*")).toHaveLength(0); // nor is a regex
-    expect(await searchPlayers(db, "")).toHaveLength(2);
-    expect((await searchPlayers(db, "omar"))[0].claimCount).toBe(2);
-  });
-
-  it("shows runs, claims with codes, consents and emails for one player", async () => {
-    const { playerId } = await claimPlayer("full@example.com", { optIn: true });
-    const detail = await playerDetail(db, playerId);
-    expect(detail?.runs).toHaveLength(1);
-    expect(detail?.claims.map((c) => c.reward).sort()).toEqual(["free_coke", "free_garlic_sauce"]);
-    expect(detail?.claims.every((c) => c.code && c.codeStatus === "assigned")).toBe(true);
-    expect(detail?.consents.map((c) => c.kind).sort()).toEqual(["marketing", "terms_age"]);
-    expect(detail?.emails).toHaveLength(1);
-    expect(detail?.devices).toBe(1);
-    expect(await playerDetail(db, "00000000-0000-4000-8000-000000000000")).toBeNull();
-  });
-
-  it("queues a resend of every code the player holds", async () => {
-    const { playerId } = await claimPlayer("again@example.com");
-    const id = await queueCouponResend(db, playerId);
-    expect(id).not.toBeNull();
-    const row = (await db.emailOutbox.findOne({ _id: id! }))!;
-    expect(row).toMatchObject({ kind: "resend", playerId });
-    expect(row.claimIds).toHaveLength(2);
-    await db.players.updateOne({ _id: playerId }, { $set: { emailBlockedAt: new Date() } });
-    expect(await queueCouponResend(db, playerId)).toBeNull();
-  });
-
-  it("exports everything held about a player", async () => {
-    const { playerId } = await claimPlayer("export@example.com", { nickname: "Exporter" });
-    const data = await exportPlayer(db, playerId);
-    expect(data?.player).toMatchObject({
-      id: playerId,
-      email: "export@example.com",
-      nickname: "Exporter",
-    });
-    expect(data?.claims).toHaveLength(2);
-    expect(data?.consents.length).toBeGreaterThan(0);
-    expect(data?.bestRun).toMatchObject({ playerId });
-    expect(data?.runs).toHaveLength(1);
-    expect(JSON.stringify(data)).not.toContain("tokenHash");
-    expect(JSON.stringify(data)).not.toContain('"_id"');
-  });
-});
-
-describe("erasing a player (DATA-07)", () => {
-  it("removes personal data, consents, devices and the leaderboard row, and keeps anonymous totals", async () => {
-    const { playerId } = await claimPlayer("gone@example.com", { optIn: true, nickname: "Goner" });
-    const other = await claimPlayer("stays@example.com", { nickname: "Stayer" });
-    expect(await topEntries(db, 10)).toHaveLength(2);
-
-    const res = await erasePlayer(db, playerId);
-    expect(res).toMatchObject({ consentRows: 2, devices: 1 });
-
-    const p = (await db.players.findOne({ _id: playerId }))!;
-    expect(p.email).toContain("@erased.invalid");
-    expect(p.email).not.toContain("gone@");
-    expect(p).toMatchObject({ nickname: null, marketingOptIn: false });
-    expect(p.deletedAt).not.toBeNull();
-    expect(await db.consents.find({ playerId }).toArray()).toEqual([]);
-    expect(await db.playerTokens.find({ playerId }).toArray()).toEqual([]);
-    expect(await db.bestRuns.find({ _id: playerId }).toArray()).toEqual([]);
-    expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Stayer"]);
-    // Anonymous totals: runs and issued codes are still counted.
-    expect(await db.runs.find({ playerId }).toArray()).toHaveLength(1);
-    const stock = await poolStats(db);
-    expect(stock.find((s) => s.reward === "free_coke")?.assigned).toBe(2);
-    // The other player is untouched.
-    expect(await db.consents.countDocuments({ playerId: other.playerId })).toBe(1);
-    // Erasing twice does nothing.
-    expect(await erasePlayer(db, playerId)).toBeNull();
-    // The address can be used again by a new player.
-    await claimPlayer("gone@example.com");
-    expect(await searchPlayers(db, "gone@")).toHaveLength(1);
-  });
-
-  it("stops queued emails", async () => {
-    const { playerId } = await claimPlayer("queued@example.com");
-    await erasePlayer(db, playerId);
-    const rows = await db.emailOutbox.find({ playerId }).toArray();
-    expect(rows.every((r) => r.status === "blocked")).toBe(true);
-  });
-
-  it("skips queued CRM events", async () => {
-    const { playerId } = await claimPlayer("crm@example.com");
-    expect(
-      (await db.crmOutbox.find({ playerId }).toArray()).every((r) => r.status === "pending"),
-    ).toBe(true);
-    await erasePlayer(db, playerId);
-    const rows = await db.crmOutbox.find({ playerId }).toArray();
-    expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((r) => r.status === "skipped")).toBe(true);
-  });
-});
-
-describe("moderation (LB-07)", () => {
-  it("hides and renames entries, and a hidden player stays hidden with the same email", async () => {
-    const { playerId } = await claimPlayer("troll@example.com", { nickname: "Troll" });
-    await claimPlayer("nice@example.com", { nickname: "Nice" });
-    expect((await topEntries(db, 10)).map((e) => e.name).sort()).toEqual(["Nice", "Troll"]);
-
-    expect(await renamePlayer(db, playerId, "Better Name")).toBe("Better Name");
-    expect(await renamePlayer(db, playerId, "<script>")).toBeNull();
-    expect(await setHidden(db, playerId, true)).toBe(true);
-    expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Nice"]);
-
-    // Coming back with the same email (any spelling) finds the same hidden player.
-    const again = await claimPlayer("T.R.O.L.L+x@example.com");
-    expect(again.playerId).not.toBe(playerId); // not gmail: dots matter, so this is a new player
-    const same = await claimPlayer("troll+again@example.com");
-    expect(same.playerId).toBe(playerId);
-    expect(await rankOfPlayer(db, playerId)).toBeNull();
-    expect((await topEntries(db, 10)).map((e) => e.name)).not.toContain("Better Name");
-
-    await setHidden(db, playerId, false);
-    expect((await topEntries(db, 10)).map((e) => e.name)).toContain("Better Name");
-  });
-
-  it("a blank rename gives a new food name", async () => {
-    const { playerId } = await claimPlayer("blank@example.com", { nickname: "Old" });
-    const name = await renamePlayer(db, playerId, "  ");
-    expect(name).toMatch(/^\S+ \S+ \d+$/);
-  });
-
-  it("can't hide or rename a player who isn't there", async () => {
-    expect(await setHidden(db, "00000000-0000-4000-8000-000000000000", true)).toBe(false);
-    expect(await renamePlayer(db, "00000000-0000-4000-8000-000000000000", "Nobody")).toBeNull();
-  });
-});
-
 describe("campaign settings (ADM-07)", () => {
-  it("validates dates, thresholds, validity, retention and recipients", async () => {
-    const form = toForm(await loadSettings(db));
+  it("loads what is stored, as the form shows it", async () => {
+    const settings = await loadSettings(db);
+    expect(settings).toMatchObject({ leaderboardOpen: true, retentionDays: 90 });
+    const form = toForm(settings);
+    expect(form).toMatchObject({ leaderboardOpen: true, retentionDays: "90" });
+    expect(form.startsAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
     expect(validateSettings(form).ok).toBe(true);
+  });
+
+  it("validates the dates and the retention period", () => {
+    const blank = { startsAt: "", endsAt: "", leaderboardOpen: false, retentionDays: "90" };
+    expect(validateSettings(blank)).toEqual({
+      ok: true,
+      value: { startsAt: null, endsAt: null, leaderboardOpen: false, retentionDays: 90 },
+    });
     const bad = validateSettings({
-      ...form,
       startsAt: "2026-11-01T00:00",
       endsAt: "2026-10-01T00:00",
+      leaderboardOpen: true,
       retentionDays: "0",
-      alertEmails: "nope",
-      rewards: {
-        free_coke: { ...form.rewards.free_coke, threshold: "5" },
-        free_garlic_sauce: { ...form.rewards.free_garlic_sauce, validityDays: "0" },
-      },
     });
-    expect(bad.ok).toBe(false);
-    if (!bad.ok) expect(bad.errors).toHaveLength(5);
+    expect(bad).toEqual({
+      ok: false,
+      errors: [
+        "The end must be after the start.",
+        "Retention is a whole number of days, 1 to 3650.",
+      ],
+    });
+    const same = { startsAt: "2026-10-15T00:00", endsAt: "2026-10-15T00:00" };
+    expect(validateSettings({ ...blank, ...same }).ok).toBe(false);
+    expect(validateSettings({ ...blank, startsAt: "2026-02-30T10:00" }).ok).toBe(false);
+    expect(validateSettings({ ...blank, endsAt: "soon" }).ok).toBe(false);
+    for (const days of ["3651", "12.5", "-3", ""]) {
+      expect(validateSettings({ ...blank, retentionDays: days }).ok).toBe(false);
+    }
+    for (const days of ["1", "3650"]) {
+      expect(validateSettings({ ...blank, retentionDays: days }).ok).toBe(true);
+    }
   });
 
   it("saves only what changed, with before and after in the audit log", async () => {
     const form = toForm(await loadSettings(db));
     const next = validateSettings({
       ...form,
-      claimsEnabled: false,
       startsAt: "2026-10-15T00:00",
       endsAt: "2026-11-15T23:59",
-      alertEmails: "ops@example.com",
-      rewards: {
-        ...form.rewards,
-        free_coke: { active: true, threshold: "150", validityDays: "14" },
-      },
+      leaderboardOpen: false,
+      retentionDays: "120",
     });
     if (!next.ok) throw new Error(next.errors.join());
     const changed = await saveSettings(db, "admin@example.com", next.value);
-    expect(changed.sort()).toEqual(
-      [
-        "alertEmails",
-        "claimsEnabled",
-        "endsAt",
-        "free_coke.threshold",
-        "free_coke.validityDays",
-        "startsAt",
-      ].sort(),
-    );
-    const after = await loadSettings(db);
-    expect(after.claimsEnabled).toBe(false);
-    expect(after.rewards.free_coke).toMatchObject({ threshold: 150, validityDays: 14 });
-    expect(after.startsAt?.toISOString()).toBe("2026-10-15T04:00:00.000Z");
-    expect(after.endsAt?.toISOString()).toBe("2026-11-16T04:59:00.000Z");
-    expect(after.rewards.free_garlic_sauce.threshold).toBe(10);
-
-    const log = await db.adminAudit.find().toArray();
-    expect(log).toHaveLength(6);
-    expect(log.every((r) => r.adminEmail === "admin@example.com")).toBe(true);
-    const threshold = log.find((r) => r.action === "reward.threshold");
-    expect(threshold?.details).toMatchObject({ field: "free_coke.threshold", from: 100, to: 150 });
-
-    expect(await saveSettings(db, "admin@example.com", next.value)).toEqual([]);
-    expect(await db.adminAudit.find().toArray()).toHaveLength(6);
-  });
-
-  it("applies new thresholds to new run tokens only", async () => {
-    const { startRun } = await import("../runs");
-    const { runTokenSchema, verifyToken } = await import("../tokens");
-    const { clearCampaignCache } = await import("../campaign");
-    const old = await startRun({ src: null, lang: "en", utm: {}, host: null });
-    const form = toForm(await loadSettings(db));
-    const next = validateSettings({
-      ...form,
-      rewards: { ...form.rewards, free_coke: { ...form.rewards.free_coke, threshold: "250" } },
+    expect(changed.sort()).toEqual(["endsAt", "leaderboardOpen", "retentionDays", "startsAt"]);
+    expect(await loadSettings(db)).toEqual({
+      startsAt: new Date("2026-10-15T04:00:00.000Z"),
+      endsAt: new Date("2026-11-16T04:59:00.000Z"),
+      leaderboardOpen: false,
+      retentionDays: 120,
     });
-    if (!next.ok) throw new Error(next.errors.join());
-    await saveSettings(db, "admin@example.com", next.value);
-    clearCampaignCache();
-    const fresh = await startRun({ src: null, lang: "en", utm: {}, host: null });
-    expect(verifyToken("run", old.token, runTokenSchema)?.rules.distanceM).toBe(100);
-    expect(verifyToken("run", fresh.token, runTokenSchema)?.rules.distanceM).toBe(250);
+    expect((await db.campaignSettings.findOne({ _id: 1 }))?.updatedBy).toBe("admin@example.com");
+
+    const log = await db.adminAudit.find().sort({ _id: 1 }).toArray();
+    expect(log.map((r) => [r.action, r.target])).toEqual([
+      ["campaign.dates", "startsAt"],
+      ["campaign.dates", "endsAt"],
+      ["campaign.leaderboard", "leaderboardOpen"],
+      ["campaign.policy", "retentionDays"],
+    ]);
+    expect(log.every((r) => r.adminEmail === "admin@example.com")).toBe(true);
+    expect(log[2].details).toEqual({ field: "leaderboardOpen", from: true, to: false });
+    expect(log[3].details).toEqual({ field: "retentionDays", from: 90, to: 120 });
+
+    // The same values again: nothing written, nothing logged.
+    expect(await saveSettings(db, "admin@example.com", next.value)).toEqual([]);
+    expect(await db.adminAudit.countDocuments()).toBe(4);
   });
 
-  it("writes audit rows for admin actions", async () => {
-    await audit(db, "admin@example.com", "codes.import", "free_coke", { imported: 3 });
-    const row = (await db.adminAudit.findOne())!;
-    expect(row).toMatchObject({ action: "codes.import", target: "free_coke" });
+  it("switching the leaderboard off stops new scores at once", async () => {
+    const before = await finish(db, GOOD(1));
+    expect(before.saveToken).not.toBeNull();
+    const form = toForm(await loadSettings(db));
+    const off = validateSettings({ ...form, leaderboardOpen: false });
+    if (!off.ok) throw new Error(off.errors.join());
+    expect(await saveSettings(db, "admin@example.com", off.value)).toEqual(["leaderboardOpen"]);
+    // Saving cleared the campaign cache, so the very next run already sees the switch.
+    expect(await finish(db, GOOD(2))).toMatchObject({
+      valid: true,
+      saveToken: null,
+      rankPreview: null,
+    });
+    // A run from before the switch can't be saved any more either.
+    await expect(save(db, before, "late@example.com")).rejects.toThrow("closed");
   });
 });
 
-describe("claimers export (ADM-06, CRM-02)", () => {
-  it("has a row per claimer with the consent fields, and can be limited to opted-in players", async () => {
-    await claimPlayer("optin@example.com", { optIn: true, nickname: "Opt In" });
-    await claimPlayer("optout@example.com");
-    // A player who only saved a score has no claim, so isn't a claimer.
-    const saved = await finish(db, BOTH(7777));
-    await claimRewards(
-      db,
-      {
-        claimToken: saved.claimToken!,
-        email: "optin@example.com",
-        lang: "en",
-        termsAge: true,
-        marketingOptIn: false,
-        src: null,
-        utm: {},
-      },
-      { ip: null, userAgent: null, now: new Date() },
-    );
+describe("the board as admins see it (LB-07)", () => {
+  it("ranks by points, then whoever got there first; hidden entries are listed but unranked", async () => {
+    const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+    await addRanked(db, { email: "low@example.com", nickname: "Low", points: 90 });
+    await addRanked(db, {
+      email: "late@example.com",
+      nickname: "Late",
+      points: 300,
+      achievedAt: ago(5),
+    });
+    await addRanked(db, {
+      email: "early@example.com",
+      nickname: "Early",
+      points: 300,
+      achievedAt: ago(30),
+    });
+    await addRanked(db, { email: "hid@example.com", nickname: "Hid", points: 500, hidden: true });
+    await addRanked(db, { email: "top@example.com", nickname: "Top", points: 400, garlic: 10 });
 
-    // "Save my score" with nothing unlocked: a player, but not a claimer.
-    const nothing = await finish(db, NOTHING(8888));
-    await claimRewards(
-      db,
-      {
-        claimToken: nothing.claimToken!,
-        email: "saveonly@example.com",
-        lang: "en",
-        termsAge: true,
-        marketingOptIn: true,
-        src: null,
-        utm: {},
-      },
-      { ip: null, userAgent: null, now: new Date() },
-    );
-    expect((await searchPlayers(db, "saveonly"))[0].claimCount).toBe(0);
-
-    const all = parseCsv(await claimersCsv(db, false));
-    const head = all[0];
-    const col = (row: string[], name: string) => row[head.indexOf(name)];
-    expect(all).toHaveLength(3);
-    const optin = all.find((r) => col(r, "email") === "optin@example.com")!;
-    expect(col(optin, "marketing_opt_in")).toBe("yes");
-    expect(col(optin, "marketing_status")).toBe("granted");
-    expect(col(optin, "marketing_text")).toContain("Boustan");
-    expect(col(optin, "marketing_text_version")).not.toBe("");
-    expect(col(optin, "marketing_ip")).toBe("203.0.113.9");
-    expect(col(optin, "marketing_source")).toBe("claim_form");
-    expect(col(optin, "terms_age_accepted_at")).not.toBe("");
-    expect(col(optin, "rewards")).toBe("free_coke; free_garlic_sauce");
-    expect(col(optin, "codes")).toMatch(/free_coke:C-COKE-\d+; free_garlic_sauce:C-GARL-\d+/);
-    expect(col(optin, "first_src")).toBe("test-src");
-    expect(col(optin, "utm_campaign")).toBe("test");
-    expect(col(optin, "nickname")).toBe("Opt In");
-    const optout = all.find((r) => col(r, "email") === "optout@example.com")!;
-    expect(col(optout, "marketing_status")).toBe("none");
-
-    const only = parseCsv(await claimersCsv(db, true));
-    expect(only).toHaveLength(2);
-    expect(col(only[1], "email")).toBe("optin@example.com");
+    const board = await boardForModeration(db);
+    expect(board.map((e) => [e.nickname, e.rank, e.points])).toEqual([
+      ["Hid", null, 500],
+      ["Top", 1, 400],
+      ["Early", 2, 300],
+      ["Late", 3, 300],
+      ["Low", 4, 90],
+    ]);
+    expect(board[0].hidden).toBe(true);
+    expect(board[1]).toMatchObject({
+      email: "top@example.com",
+      hidden: false,
+      distanceM: 300,
+      garlic: 10,
+    });
+    // The public board agrees on the order.
+    expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Top", "Early", "Late", "Low"]);
+    expect(await boardForModeration(db, 2)).toHaveLength(2);
   });
 
-  it("lists claimers oldest first", async () => {
-    await claimPlayer("first@example.com");
-    await claimPlayer("second@example.com");
-    await claimPlayer("third@example.com");
-    const csv = parseCsv(await claimersCsv(db, false));
-    expect(csv.slice(1).map((r) => r[csv[0].indexOf("email")])).toEqual([
-      "first@example.com",
-      "second@example.com",
-      "third@example.com",
+  it("lists flagged runs and counts them by reason", async () => {
+    await finish(db, { ...GOOD(5), garlic: 999 });
+    await finish(db, { ...SHORT(6), distance: 5000 });
+    await finish(db, GOOD(7)); // valid: not listed
+    const flagged = await flaggedRuns(db);
+    expect(flagged.map((r) => r.reason).sort()).toEqual(["distance", "garlic"]);
+    expect(flagged.find((r) => r.reason === "distance")).toMatchObject({
+      distanceM: 5000,
+      playerId: null,
+      src: "test-src",
+      clientVersion: "test",
+    });
+    expect(await flagSummary(db)).toEqual([
+      { reason: "distance", n: 1 },
+      { reason: "garlic", n: 1 },
+    ]);
+  });
+});
+
+describe("winners", () => {
+  it("are the top 3 visible players, with what Boustan needs to reach them", async () => {
+    for (const [i, points] of [500, 400, 300, 200, 100].entries()) {
+      await addRanked(db, {
+        email: `p${i}@example.com`,
+        nickname: `P${i}`,
+        points,
+        language: i === 2 ? "fr" : "en",
+        marketingOptIn: i === 2,
+      });
+    }
+    const second = (await db.players.findOne({ email: "p1@example.com" }))!;
+    await setHidden(db, second._id, true);
+
+    const top = await winners(db);
+    expect(top.map((w) => [w.rank, w.nickname, w.email, w.points])).toEqual([
+      [1, "P0", "p0@example.com", 500],
+      [2, "P2", "p2@example.com", 300],
+      [3, "P3", "p3@example.com", 200],
+    ]);
+    expect(top[1]).toMatchObject({ language: "fr", marketingOptIn: true });
+    // These scores were placed directly, so there is no run to check them against.
+    expect(top[0]).toMatchObject({ activeMs: null, hits: null, garlicAppeared: null });
+    expect(await winnerIds(db)).toEqual(top.map((w) => w.playerId));
+    expect((await topEntries(db, 3)).map((e) => e.name)).toEqual(["P0", "P2", "P3"]);
+  });
+
+  it("carry the numbers of the run behind the score", async () => {
+    const run = GOOD(21);
+    const finished = await finish(db, run);
+    const { playerId } = await save(db, finished, "Winner@Example.com", {
+      nickname: "Top Dog",
+      marketingOptIn: true,
+      lang: "fr",
+    });
+    const [w] = await winners(db);
+    expect(w).toMatchObject({
+      playerId,
+      rank: 1,
+      nickname: "Top Dog",
+      email: "Winner@Example.com",
+      language: "fr",
+      marketingOptIn: true,
+      runId: finished.runId,
+      points: pointsFor(run),
+      garlic: run.garlic,
+      activeMs: run.activeMs,
+      hits: run.hits,
+      garlicAppeared: createLevel(run.seed).garlicSpawnedUpTo(distanceMAt(run.activeMs)),
+    });
+    expect(w.garlicAppeared).toBeGreaterThanOrEqual(w.garlic);
+  });
+
+  it("are nobody while the board is empty", async () => {
+    expect(await winners(db)).toEqual([]);
+    expect(await winnerIds(db)).toEqual([]);
+  });
+});
+
+describe("players export (ADM-06, CRM-02)", () => {
+  /** The CSV as one object per row, keyed by column. */
+  async function read(opts?: PlayersCsvOptions) {
+    const [head, ...rows] = parseCsv(await playersCsv(db, opts));
+    expect(head).toEqual(PLAYER_COLUMNS);
+    return rows.map((r) => Object.fromEntries(head.map((name, i) => [name, r[i]])));
+  }
+
+  it("has a row per player on the board, in rank order, with the score and consent fields", async () => {
+    const opted = await savedPlayer("optin@example.com", {
+      nickname: "Opt In",
+      marketingOptIn: true,
+    });
+    await addRanked(db, { email: "top@example.com", nickname: "Top", points: 99_999 });
+    await addRanked(db, {
+      email: "hid@example.com",
+      nickname: "Hid",
+      points: 50_000,
+      hidden: true,
+    });
+    await addRanked(db, { email: "last@example.com", nickname: "Last", points: 1 });
+
+    const rows = await read();
+    expect(rows.map((r) => [r.rank, r.email, r.hidden])).toEqual([
+      ["1", "top@example.com", "no"],
+      ["", "hid@example.com", "yes"],
+      ["2", "optin@example.com", "no"],
+      ["3", "last@example.com", "no"],
+    ]);
+    const terms = consentText("en", "terms_age");
+    const marketing = consentText("en", "marketing");
+    expect(rows[2]).toMatchObject({
+      nickname: "Opt In",
+      points: String(pointsFor(opted.run)),
+      distance_m: String(Math.floor(distanceMAt(opted.run.activeMs))),
+      garlic: String(opted.run.garlic),
+      language: "en",
+      marketing_opt_in: "yes",
+      terms_age_text: terms.text,
+      terms_age_text_version: terms.version,
+      marketing_status: "granted",
+      marketing_text: marketing.text,
+      marketing_text_version: marketing.version,
+      marketing_language: "en",
+      marketing_source: "save_form",
+      marketing_ip: "203.0.113.7",
+      marketing_user_agent: "vitest",
+      marketing_host_origin: "https://host.example",
+      first_src: "test-src",
+      utm_campaign: "test",
+      first_host: "https://host.example",
+    });
+    expect(rows[2].terms_age_accepted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(rows[2].achieved_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(rows[0]).toMatchObject({
+      points: "99999",
+      marketing_opt_in: "no",
+      marketing_status: "none",
+      terms_age_accepted_at: "",
+    });
+  });
+
+  it("can be limited to the winners or to players who opted in, keeping the board's ranks", async () => {
+    await addRanked(db, { email: "a@example.com", points: 500, marketingOptIn: true });
+    await addRanked(db, {
+      email: "b@example.com",
+      points: 400,
+      hidden: true,
+      marketingOptIn: true,
+    });
+    await addRanked(db, { email: "c@example.com", points: 300 });
+    await addRanked(db, { email: "d@example.com", points: 200, marketingOptIn: true });
+    await addRanked(db, { email: "e@example.com", points: 100, marketingOptIn: true });
+
+    const ranks = (rows: Record<string, string>[]) => rows.map((r) => [r.rank, r.email]);
+    expect(ranks(await read({ winnersOnly: true }))).toEqual([
+      ["1", "a@example.com"],
+      ["2", "c@example.com"],
+      ["3", "d@example.com"],
+    ]);
+    expect(ranks(await read({ optedInOnly: true }))).toEqual([
+      ["1", "a@example.com"],
+      ["", "b@example.com"],
+      ["3", "d@example.com"],
+      ["4", "e@example.com"],
+    ]);
+    expect(ranks(await read({ winnersOnly: true, optedInOnly: true }))).toEqual([
+      ["1", "a@example.com"],
+      ["3", "d@example.com"],
     ]);
   });
 
-  it("shows a withdrawal as the current marketing status", async () => {
-    const { playerId } = await claimPlayer("leaver@example.com", { optIn: true });
-    const { unsubscribe } = await import("../unsubscribe");
-    const { signToken } = await import("../tokens");
-    await unsubscribe(db, signToken("unsubscribe", { v: 1, p: playerId }), {
-      ip: "198.51.100.2",
-      userAgent: "mail-client",
-      now: new Date(),
-    });
-    const csv = parseCsv(await claimersCsv(db, false));
-    const row = csv[1];
-    const col = (name: string) => row[csv[0].indexOf(name)];
-    expect(col("marketing_opt_in")).toBe("no");
-    expect(col("marketing_status")).toBe("withdrawn");
-    expect(col("marketing_source")).toBe("unsubscribe");
-    // Opted-in only leaves them out.
-    expect(parseCsv(await claimersCsv(db, true))).toHaveLength(1);
+  it("leaves out erased players and players without a score", async () => {
+    const gone = await savedPlayer("gone@example.com");
+    await erasePlayer(db, gone.playerId);
+    await db.players.insertOne(
+      newPlayer({ email: "none@example.com", emailNormalized: "none@example.com", language: "en" }),
+    );
+    expect(await read()).toEqual([]);
   });
 
-  it("defuses spreadsheet formulas in nicknames", async () => {
-    // A nickname can't start with = (format rules), but a placement can carry odd text.
-    await claimPlayer("formula@example.com");
-    await db.players.updateOne(
-      { emailNormalized: "formula@example.com" },
-      { $set: { nickname: "=SUM(A1)", firstSrc: "@cmd" } },
+  it("quotes commas and quotes, and defuses spreadsheet formulas", async () => {
+    await addRanked(db, {
+      email: "formula@example.com",
+      nickname: '=HYPERLINK("x")',
+      points: 10,
+      firstSrc: "@cmd",
+      utm: { utm_campaign: 'fall, "launch"' },
+    });
+    const csv = await playersCsv(db);
+    expect(csv.startsWith("﻿")).toBe(true);
+    expect(csv).toContain(`"'=HYPERLINK(""x"")"`);
+    const [row] = await read();
+    expect(row).toMatchObject({
+      nickname: `'=HYPERLINK("x")`,
+      first_src: "'@cmd",
+      utm_campaign: 'fall, "launch"',
+    });
+  });
+});
+
+describe("players (ADM-04)", () => {
+  it("searches by email or nickname, literally, and shows each player's best points", async () => {
+    const marie = await savedPlayer("marie.tremblay@example.com", { nickname: "Marie T" });
+    await savedPlayer("omar@example.com", { nickname: "Omar 100" });
+    expect((await searchPlayers(db, "tremblay")).map((p) => p.nickname)).toEqual(["Marie T"]);
+    expect((await searchPlayers(db, "OMAR")).map((p) => p.email)).toEqual(["omar@example.com"]);
+    expect((await searchPlayers(db, "100")).map((p) => p.nickname)).toEqual(["Omar 100"]);
+    expect(await searchPlayers(db, "%")).toHaveLength(0); // % is not a wildcard
+    expect(await searchPlayers(db, ".*")).toHaveLength(0); // nor is a regex
+    expect(await searchPlayers(db, "(")).toHaveLength(0); // and a bracket is just a character
+    expect(await searchPlayers(db, "")).toHaveLength(2);
+    expect((await searchPlayers(db, "marie"))[0]).toMatchObject({
+      id: marie.playerId,
+      language: "en",
+      hidden: false,
+      marketingOptIn: false,
+      bestPoints: pointsFor(marie.run),
+    });
+
+    await db.players.insertOne(
+      newPlayer({
+        email: "nobest@example.com",
+        emailNormalized: "nobest@example.com",
+        language: "fr",
+      }),
     );
-    const csv = await claimersCsv(db, false);
-    expect(csv).toContain("'=SUM(A1)");
-    expect(csv).toContain("'@cmd");
+    expect((await searchPlayers(db, "nobest"))[0].bestPoints).toBeNull();
+  });
+
+  it("shows one player's runs, consents and devices", async () => {
+    const p = await savedPlayer("full@example.com", { nickname: "Full", marketingOptIn: true });
+    // A later run from the same device is saved as it finishes.
+    await finish(db, SHORT(5), p.response.playerToken);
+    const detail = (await playerDetail(db, p.playerId))!;
+    expect(Object.keys(detail).sort()).toEqual(["best", "consents", "devices", "player", "runs"]);
+    expect(detail.player.email).toBe("full@example.com");
+    expect(detail.runs).toHaveLength(2);
+    expect(detail.runs.every((r) => r.savedAt !== null && r.playerId === p.playerId)).toBe(true);
+    expect(detail.best).toMatchObject({ runId: p.runId, points: pointsFor(p.run) });
+    expect(detail.consents.map((c) => c.kind).sort()).toEqual(["marketing", "terms_age"]);
+    expect(detail.devices).toBe(1);
+    expect(await playerDetail(db, NOBODY)).toBeNull();
+  });
+
+  it("exports everything held about a player as JSON", async () => {
+    const p = await savedPlayer("export@example.com", { nickname: "Exporter" });
+    const data = (await exportPlayer(db, p.playerId))!;
+    expect(Object.keys(data).sort()).toEqual([
+      "bestRun",
+      "consents",
+      "exportedAt",
+      "player",
+      "runs",
+    ]);
+    expect(data.player).toMatchObject({
+      id: p.playerId,
+      email: "export@example.com",
+      nickname: "Exporter",
+      hiddenFromLeaderboard: false,
+      marketingOptIn: false,
+      firstSrc: "test-src",
+    });
+    expect(data.player).not.toHaveProperty("emailBlockedAt");
+    expect(data.bestRun).toEqual({
+      points: pointsFor(p.run),
+      distanceM: distanceMAt(p.run.activeMs),
+      garlic: p.run.garlic,
+      achievedAt: expect.any(Date),
+      runId: p.runId,
+    });
+    expect(data.runs).toEqual([
+      expect.objectContaining({ id: p.runId, status: "valid", points: pointsFor(p.run) }),
+    ]);
+    expect(data.consents.map((c) => c.kind)).toEqual(["terms_age"]);
+    const json = JSON.stringify(data);
+    expect(json).not.toContain("tokenHash");
+    expect(json).not.toContain('"_id"');
+    expect(await exportPlayer(db, NOBODY)).toBeNull();
+  });
+});
+
+describe("erasing a player (DATA-07)", () => {
+  it("removes personal data, consents, devices and the leaderboard row, and keeps anonymous totals", async () => {
+    const gone = await savedPlayer("gone@example.com", { nickname: "Goner", marketingOptIn: true });
+    const other = await savedPlayer("stays@example.com", { nickname: "Stayer" });
+    expect(await topEntries(db, 10)).toHaveLength(2);
+
+    expect(await erasePlayer(db, gone.playerId)).toEqual({ consentRows: 2, devices: 1 });
+
+    const p = (await db.players.findOne({ _id: gone.playerId }))!;
+    expect(p.email).toBe(`erased-${gone.playerId}@erased.invalid`);
+    expect(p).toMatchObject({
+      nickname: null,
+      marketingOptIn: false,
+      hidden: false,
+      ageConfirmedAt: null,
+      utm: {},
+      crmStatus: "skipped",
+    });
+    expect(p.deletedAt).not.toBeNull();
+    expect(await db.consents.countDocuments({ playerId: gone.playerId })).toBe(0);
+    expect(await db.playerTokens.countDocuments({ playerId: gone.playerId })).toBe(0);
+    expect(await db.bestRuns.countDocuments({ _id: gone.playerId })).toBe(0);
+    expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Stayer"]);
+    // Anonymous totals: the run is still counted.
+    expect(await db.runs.countDocuments({ playerId: gone.playerId })).toBe(1);
+    // The other player is untouched.
+    expect(await db.consents.countDocuments({ playerId: other.playerId })).toBe(1);
+    // Erasing twice does nothing, and the player is gone from the lists.
+    expect(await erasePlayer(db, gone.playerId)).toBeNull();
+    expect(await searchPlayers(db, "")).toHaveLength(1);
+  });
+
+  it("skips the player's queued CRM rows", async () => {
+    const p = await savedPlayer("crm@example.com", { marketingOptIn: true });
+    const queued = await db.crmOutbox.find({ playerId: p.playerId }).toArray();
+    expect(queued.length).toBeGreaterThan(0);
+    expect(queued.every((r) => r.status === "pending")).toBe(true);
+    await erasePlayer(db, p.playerId);
+    const rows = await db.crmOutbox.find({ playerId: p.playerId }).toArray();
+    expect(rows).toHaveLength(queued.length);
+    expect(rows.every((r) => r.status === "skipped" && r.lastError === "player erased")).toBe(true);
+  });
+
+  it("lifts the block on a hidden player: the address can come back as a new player", async () => {
+    const troll = await savedPlayer("troll@example.com", { nickname: "Troll" });
+    await setHidden(db, troll.playerId, true);
+    // While hidden, a new score with the same email stays with the hidden player.
+    const again = await savedPlayer("troll+again@example.com");
+    expect(again.playerId).toBe(troll.playerId);
+    expect(await topEntries(db, 10)).toEqual([]);
+
+    await erasePlayer(db, troll.playerId);
+    expect((await db.players.findOne({ _id: troll.playerId }))!.hidden).toBe(false);
+    const back = await savedPlayer("troll@example.com", { nickname: "Reformed" });
+    expect(back.playerId).not.toBe(troll.playerId);
+    expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Reformed"]);
+  });
+});
+
+describe("hiding and renaming (LB-07)", () => {
+  it("hides and shows an entry, and renames it within the format rules", async () => {
+    const { player } = await addRanked(db, {
+      email: "x@example.com",
+      nickname: "Troll",
+      points: 200,
+    });
+    await addRanked(db, { email: "nice@example.com", nickname: "Nice", points: 100 });
+
+    expect(await renamePlayer(db, player._id, "  Better   Name ")).toBe("Better Name");
+    for (const bad of ["<script>", "x", "A name far too long for it"]) {
+      expect(await renamePlayer(db, player._id, bad)).toBeNull();
+    }
+    expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Better Name", "Nice"]);
+
+    expect(await setHidden(db, player._id, true)).toBe(true);
+    expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Nice"]);
+    expect(await rankOfPlayer(db, player._id)).toBeNull();
+    expect(await setHidden(db, player._id, false)).toBe(true);
+    expect((await topEntries(db, 10)).map((e) => e.name)).toEqual(["Better Name", "Nice"]);
+  });
+
+  it("gives a new food name for a blank one", async () => {
+    const { player } = await addRanked(db, {
+      email: "blank@example.com",
+      nickname: "Old",
+      points: 1,
+    });
+    const name = await renamePlayer(db, player._id, "  ");
+    expect(name).toMatch(/^\S+ \S+ \d+$/);
+    expect((await db.players.findOne({ _id: player._id }))!.nickname).toBe(name);
+  });
+
+  it("can't hide or rename a player who isn't there, or was erased", async () => {
+    expect(await setHidden(db, NOBODY, true)).toBe(false);
+    expect(await renamePlayer(db, NOBODY, "Nobody")).toBeNull();
+    const { player } = await addRanked(db, { email: "erased@example.com", points: 5 });
+    await erasePlayer(db, player._id);
+    expect(await setHidden(db, player._id, true)).toBe(false);
+    expect(await renamePlayer(db, player._id, "Ghost")).toBeNull();
   });
 });
 
 describe("data retention (DATA-06)", () => {
-  const DAY = 86_400_000;
-  const endCampaign = (daysAgo: number, retentionDays = 90) =>
+  const endContest = (daysAgo: number | null, retentionDays = 90) =>
     db.campaignSettings.updateOne(
-      {},
-      { $set: { endsAt: new Date(Date.now() - daysAgo * DAY), retentionDays } },
+      { _id: 1 },
+      {
+        $set: {
+          endsAt: daysAgo === null ? null : new Date(Date.now() - daysAgo * DAY),
+          retentionDays,
+        },
+      },
     );
-  const expireClaims = (daysAgo: number) =>
-    db.claims.updateMany({}, { $set: { expiresAt: new Date(Date.now() - daysAgo * DAY) } });
+  /** Three players far ahead of everyone else: the winners. */
+  const addWinners = async () => {
+    for (let i = 0; i < 3; i++) {
+      await addRanked(db, { email: `winner${i}@example.com`, points: 10_000 - i });
+    }
+  };
+
+  it("starts the purge the retention period after the end date", async () => {
+    await endContest(null);
+    expect(await purgeDate(db)).toBeNull();
+    await endContest(10, 30);
+    const endsAt = (await db.campaignSettings.findOne({ _id: 1 }))!.endsAt!;
+    expect((await purgeDate(db))!.getTime()).toBe(endsAt.getTime() + 30 * DAY);
+  });
 
   it("does nothing before the purge date or without an end date", async () => {
-    await claimPlayer("early@example.com");
+    await addWinners();
+    await addRanked(db, { email: "early@example.com", points: 1 });
+    await endContest(null);
+    expect(await retentionDue(db)).toBe(0);
     expect(await runRetention(db)).toEqual({ due: false, anonymized: 0, remaining: 0 });
-    await endCampaign(30);
+    await endContest(100, 180);
     expect(await runRetention(db)).toEqual({ due: false, anonymized: 0, remaining: 0 });
     expect(await searchPlayers(db, "early@")).toHaveLength(1);
-  });
-
-  it("anonymizes players who did not opt in once 90 days have passed, and keeps opted-in contacts", async () => {
-    const out = await claimPlayer("out@example.com");
-    const inn = await claimPlayer("in@example.com", { optIn: true });
-    await endCampaign(120);
-    // Their codes expired along with the campaign.
-    await expireClaims(30);
+    await endContest(200, 180);
     expect(await retentionDue(db)).toBe(1);
-    const res = await runRetention(db);
-    expect(res).toEqual({ due: true, anonymized: 1, remaining: 0 });
-    const gone = (await db.players.findOne({ _id: out.playerId }))!;
-    expect(gone.deletedAt).not.toBeNull();
-    expect(gone.email).toContain("@erased.invalid");
-    const kept = (await db.players.findOne({ _id: inn.playerId }))!;
-    expect(kept.deletedAt).toBeNull();
-    expect(kept.email).toBe("in@example.com");
+    expect(await runRetention(db)).toEqual({ due: true, anonymized: 1, remaining: 0 });
+    expect(await searchPlayers(db, "early@")).toEqual([]);
+  });
+
+  it("anonymizes players who did not opt in, and keeps opted-in contacts and the current winners", async () => {
+    await addRanked(db, { email: "first@example.com", points: 500 });
+    await addRanked(db, { email: "second@example.com", points: 400 });
+    await addRanked(db, { email: "hidden@example.com", points: 450, hidden: true });
+    await addRanked(db, { email: "third@example.com", points: 300 });
+    await addRanked(db, { email: "in@example.com", points: 200, marketingOptIn: true });
+    const out = await addRanked(db, { email: "out@example.com", points: 100 });
+    await endContest(120);
+
+    // The hidden player isn't a winner; the opted-in one is kept anyway.
+    expect(await retentionDue(db)).toBe(2);
+    expect(await runRetention(db)).toEqual({ due: true, anonymized: 2, remaining: 0 });
+    const kept = await db.players.find({ deletedAt: null }).toArray();
+    expect(kept.map((p) => p.email).sort()).toEqual([
+      "first@example.com",
+      "in@example.com",
+      "second@example.com",
+      "third@example.com",
+    ]);
+    expect((await db.players.findOne({ _id: out.player._id }))!.email).toContain("@erased.invalid");
+    expect((await winners(db)).map((w) => w.email)).toEqual([
+      "first@example.com",
+      "second@example.com",
+      "third@example.com",
+    ]);
+
     const log = await db.adminAudit.find().toArray();
-    expect(log.map((r) => r.action)).toContain("retention.purge");
-    expect(log[0].adminEmail).toBe("system:retention");
-    expect(await runRetention(db)).toMatchObject({ anonymized: 0 });
+    expect(log).toHaveLength(1);
+    expect(log[0]).toMatchObject({
+      adminEmail: RETENTION_ACTOR,
+      action: "retention.purge",
+      target: "players",
+      details: { anonymized: 2 },
+    });
+    // Nothing left to do: nothing more is logged.
+    expect(await runRetention(db)).toEqual({ due: true, anonymized: 0, remaining: 0 });
+    expect(await db.adminAudit.countDocuments()).toBe(1);
   });
 
-  it("honours a longer retention setting and waits for unexpired codes", async () => {
-    const holder = await claimPlayer("holder@example.com");
-    await endCampaign(100, 180);
-    expect((await runRetention(db)).due).toBe(false);
-    await endCampaign(200, 180);
-    // Still holds codes that haven't expired.
-    expect(await runRetention(db)).toMatchObject({ due: true, anonymized: 0 });
-    await expireClaims(1);
-    expect(await runRetention(db)).toMatchObject({ anonymized: 1 });
-    const p = (await db.players.findOne({ _id: holder.playerId }))!;
-    expect(p.deletedAt).not.toBeNull();
-  });
-
-  it("works through a backlog in batches", async () => {
-    for (let i = 0; i < 5; i++) await claimPlayer(`p${i}@example.com`);
-    await endCampaign(200);
-    await expireClaims(1);
+  it("works through a backlog in batches, oldest players first", async () => {
+    await addWinners();
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const { player } = await addRanked(db, {
+        email: `p${i}@example.com`,
+        points: 10 + i,
+        createdAt: new Date(Date.now() - (50 - i) * 60_000),
+      });
+      ids.push(player._id);
+    }
+    await endContest(200);
     expect(await runRetention(db, new Date(), 2)).toEqual({
       due: true,
       anonymized: 2,
       remaining: 3,
     });
+    const erased = await db.players.find({ deletedAt: { $ne: null } }).toArray();
+    expect(erased.map((p) => p._id).sort()).toEqual([ids[0], ids[1]].sort());
     expect(await runRetention(db, new Date(), 10)).toEqual({
       due: true,
       anonymized: 3,
       remaining: 0,
     });
+    expect(await db.players.countDocuments({ deletedAt: null })).toBe(3);
+  });
+});
+
+describe("dashboard (ADM-02)", () => {
+  const ev = (name: string, sessionId: string, extra: Partial<EventDoc> = {}) =>
+    newEvent({ name, sessionId, src: "lapresse", lang: "fr", device: "mobile", ...extra });
+  const elsewhere = { src: "other", lang: "en", device: "desktop" };
+
+  it("counts the funnel steps from the rolled-up events", async () => {
+    await db.events.insertMany([
+      ev("load", "s1"),
+      ev("load", "s1"),
+      ev("load", "s2"),
+      ev("start", "s1"),
+      ev("start", "s1"),
+      ev("start", "s2"),
+      ev("game_over", "s1"),
+      ev("game_over", "s1"),
+      ev("game_over", "s2"),
+      ev("milestone", "s1", { props: { points: 100 } }),
+      ev("save_view", "s1"),
+      ev("save_success", "s1"),
+      ev("save_error", "s2", { props: { reason: "closed" } }),
+      ev("load", "s3", elsewhere),
+      ev("start", "s3", elsewhere),
+    ]);
+    await recordServerEvent(db, "opt_in", {}, { src: "lapresse", lang: "fr", device: "mobile" });
+    const today = montrealDay();
+    await rollupEvents(db, today);
+
+    const bySrc = await funnel(db, today, today, "src");
+    expect(bySrc).toEqual([
+      { key: "lapresse", loads: 2, starts: 3, finishes: 3, saveViews: 1, saves: 1, optIns: 1 },
+      { key: "other", loads: 1, starts: 1, finishes: 0, saveViews: 0, saves: 0, optIns: 0 },
+    ]);
+    const total = { loads: 3, starts: 4, finishes: 3, saveViews: 1, saves: 1, optIns: 1 };
+    expect(await funnel(db, today, today, "day")).toEqual([{ key: today, ...total }]);
+    expect(sumFunnel(bySrc)).toEqual(total);
+    expect(sumFunnel([])).toEqual(emptyFunnel());
+    expect(FUNNEL_STEPS.map((s) => s.key)).toEqual(Object.keys(emptyFunnel()));
+    expect(await funnel(db, "2000-01-01", "2000-01-02", "day")).toEqual([]);
   });
 
-  it("anonymizes the oldest players first", async () => {
-    const first = await claimPlayer("old@example.com");
-    await claimPlayer("middle@example.com");
-    await claimPlayer("young@example.com");
-    await endCampaign(200);
-    await expireClaims(1);
-    await runRetention(db, new Date(), 1);
-    expect((await db.players.findOne({ _id: first.playerId }))!.deletedAt).not.toBeNull();
-    expect(await db.players.countDocuments({ deletedAt: null })).toBe(2);
+  it("reports players, runs, flags, scores saved today and the top score", async () => {
+    expect(await health(db)).toEqual({
+      players: 0,
+      optedIn: 0,
+      runs24h: 0,
+      flaggedRuns24h: 0,
+      savedToday: 0,
+      top: null,
+    });
+
+    const alpha = await savedPlayer("alpha@example.com", {
+      nickname: "Alpha",
+      marketingOptIn: true,
+    });
+    await finish(db, SHORT(3), alpha.response.playerToken); // saved as it finishes
+    await finish(db, SHORT(4)); // anonymous: not saved
+    await finish(db, { ...GOOD(5), garlic: 999 }); // flagged
+    // A hidden player's score is not the top score.
+    await addRanked(db, {
+      email: "hid@example.com",
+      nickname: "Hid",
+      points: 1_000_000,
+      hidden: true,
+    });
+    // A run saved two days ago counts for neither the last 24 hours nor today.
+    const old = new Date(Date.now() - 2 * DAY);
+    await db.runs.insertOne(
+      newRun({
+        _id: randomUUID(),
+        seed: 1,
+        tuningVersion: TUNING.version,
+        issuedAt: old,
+        finishedAt: old,
+        activeMs: 1000,
+        distanceM: 4,
+        garlic: 0,
+        hits: 0,
+        points: 4,
+        status: "valid",
+        savedAt: old,
+      }),
+    );
+
+    expect(await health(db)).toEqual({
+      players: 2,
+      optedIn: 1,
+      runs24h: 4,
+      flaggedRuns24h: 1,
+      savedToday: 2,
+      top: { points: pointsFor(alpha.run), nickname: "Alpha" },
+    });
   });
 });

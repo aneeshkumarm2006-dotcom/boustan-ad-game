@@ -4,20 +4,20 @@
  * What changed from the reference:
  * - Obstacles and garlic come from the seeded level (GAME-06). Their positions are functions of
  *   active run time, so they don't depend on frame rate.
- * - Distance comes from the speed curve (SEC-02); score is distance, garlic and hits.
- * - Rewards unlock mid-run with a banner (GAME-02); milestones are by distance (GAME-05).
+ * - Distance comes from the speed curve (SEC-02). A run scores 1 point per metre and 10 per
+ *   garlic (game-core/score.ts), counted live in the HUD; milestones are by points (GAME-05).
  * - Pause with a 3-2-1 countdown on resume (GAME-09). Paused time isn't counted.
  * - Canvas text comes from the i18n dictionaries and follows language switches mid-run.
  * - The backing store is a whole multiple k of the 320 px logical canvas (see `fit`), so the
  *   brand fonts and the logo are sharp. Game logic and every coordinate stay in logical px.
  */
 import {
-  REWARD_IDS,
+  POINTS_PER_GARLIC,
   TUNING,
   createLevel,
   distanceMAt,
   distancePxAt,
-  meetsRule,
+  pointsOf,
   pxToMetres,
   speedAt,
   timeAtDistancePx,
@@ -25,8 +25,6 @@ import {
   type GarlicSpawn,
   type Level,
   type ObstacleSpawn,
-  type RewardId,
-  type RewardRules,
 } from "@/game-core";
 import type { Translator } from "@/i18n";
 import { PALETTE, alpha, mix } from "@/lib/brand";
@@ -60,34 +58,29 @@ export interface RunResult {
   garlic: number;
   hits: number;
   activeMs: number;
-  unlocked: RewardId[];
+  /** 1 per whole metre plus 10 per garlic: the same number the server scores. */
+  points: number;
   cause: DeathCause;
 }
 
 export interface RunSetup {
   seed: number;
-  rules: RewardRules;
-  /** Whether each reward can be claimed in this run (campaign open, in stock, online). */
-  claimable: Record<RewardId, boolean>;
 }
 
 export type GameEvent =
   /** The first frame is on screen: the game can be played. */
   | { type: "ready" }
   | { type: "state"; state: GameState }
-  | { type: "milestone"; m: number }
-  | { type: "unlock"; reward: RewardId; claimable: boolean; text: string }
+  | { type: "milestone"; points: number }
   | { type: "over"; result: RunResult };
 
 export interface HudRefs {
   /** Spit meter group; gets data-level="low|mid|high". */
   spit: HTMLElement;
   meterFill: HTMLElement;
-  distance: HTMLElement;
-  distanceValue: HTMLElement;
-  distanceBar: HTMLElement;
+  /** Live counts: the run's points so far, and garlic picked up. */
+  points: HTMLElement;
   garlic: HTMLElement;
-  garlicValue: HTMLElement;
 }
 
 export interface GameOptions {
@@ -142,16 +135,9 @@ interface FloatText {
   life: number;
   max: number;
 }
-interface Banner {
-  reward: RewardId;
-  text: () => string;
-  life: number;
-  max: number;
-}
 
 const { view, physics, heat: HEAT, obstacles: OB, speed: SPEED } = TUNING;
 const W = view.width;
-const BANNER_S = 1.5;
 const COUNTDOWN_S = 3;
 /** The backing store is at most this many times the logical size, and this many pixels. */
 const MAX_K = 6;
@@ -161,7 +147,6 @@ const BLEED = 8;
 
 // Guide de style palette: Vert and Toum, Navet as the accent, the rest used with restraint.
 const { vert, toum, navet, hummus, poivron, tomate, avocat, laitue } = PALETTE;
-const CONFETTI = [navet, toum, avocat, hummus, laitue];
 const DUST = [mix(vert, toum, 0.3), mix(vert, toum, 0.2)];
 const FEATHERS = [toum, mix(toum, vert, 0.12), mix(toum, vert, 0.25)];
 const DIM = alpha(vert, 0.7);
@@ -241,10 +226,8 @@ export class Game {
   private cups: ActiveGarlic[] = [];
   private parts: Particle[] = [];
   private texts: FloatText[] = [];
-  private banners: Banner[] = [];
-  private unlocked = new Set<RewardId>();
   private milestoneIdx = 0;
-  private nextMilestone: number = TUNING.milestonesM[0];
+  private nextMilestone: number = TUNING.milestonesPts[0];
   private shake = 0;
   private caughtT = 0;
   private countdown = 0;
@@ -263,15 +246,7 @@ export class Game {
     visible: true,
   };
   private cheats = { invincible: false, magnet: false };
-  private hudCache = {
-    meter: -1,
-    level: "",
-    dist: "",
-    distDone: "",
-    bar: -1,
-    garlic: "",
-    garlicDone: "",
-  };
+  private hudCache = { meter: -1, level: "", points: "", garlic: "" };
 
   constructor(opts: GameOptions) {
     this.opts = opts;
@@ -327,10 +302,8 @@ export class Game {
     this.cups = [];
     this.parts = [];
     this.texts = [];
-    this.banners = [];
-    this.unlocked = new Set();
     this.milestoneIdx = 0;
-    this.nextMilestone = TUNING.milestonesM[0];
+    this.nextMilestone = TUNING.milestonesPts[0];
     this.shake = 0;
     this.wrap = null;
     this.lastHit = null;
@@ -342,7 +315,7 @@ export class Game {
       inv: 0,
       visible: true,
     });
-    this.hudCache.dist = "";
+    this.hudCache.points = this.hudCache.garlic = "";
     this.setState("play");
     this.floatText(() => this.t.t("canvas.run"), W / 2, this.ground - 80, avocat, 22, 1);
     this.play("start");
@@ -382,8 +355,7 @@ export class Game {
 
   setTranslator(t: Translator): void {
     this.t = t;
-    this.hudCache.dist = "";
-    this.hudCache.garlic = "";
+    this.hudCache.points = this.hudCache.garlic = "";
     this.updateHud();
   }
 
@@ -417,7 +389,7 @@ export class Game {
       garlic: this.garlic,
       hits: this.hits,
       heat: this.heat,
-      unlocked: [...this.unlocked],
+      points: this.points(),
     };
   }
 
@@ -664,10 +636,6 @@ export class Game {
       t.life -= dt;
     }
     this.texts = this.texts.filter((t) => t.life > 0);
-    if (this.banners.length > 0) {
-      this.banners[0].life -= dt;
-      if (this.banners[0].life <= 0) this.banners.shift();
-    }
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 20);
   }
 
@@ -760,17 +728,27 @@ export class Game {
         this.garlic++;
         this.heat = Math.max(0, this.heat - HEAT.garlicCool);
         this.burst(cup.x + 4, cup.y - 4, 8, [avocat, toum, toum], 60, 0, 0.45, 1);
-        this.floatText(() => this.t.t("canvas.garlicPlus"), cup.x + 4, cup.y - 12, avocat, 10, 0.6);
+        this.floatText(
+          () => this.t.t("canvas.garlicPlus", { n: POINTS_PER_GARLIC }),
+          cup.x + 4,
+          cup.y - 12,
+          avocat,
+          10,
+          0.6,
+        );
         this.play("pick");
       }
     }
     this.cups = this.cups.filter((cup) => cup.x > -12 && !cup.taken);
 
-    const distanceM = pxToMetres(this.dist);
-    const unlockedNow = this.checkUnlocks(distanceM);
-    this.checkMilestones(distanceM, unlockedNow);
+    this.checkMilestones(this.points());
     if (this.heat >= HEAT.max) this.caught();
     this.updateHud();
+  }
+
+  /** The run's points so far: whole metres plus 10 per garlic (game-core/score.ts). */
+  private points(): number {
+    return pointsOf({ distanceM: pxToMetres(this.dist), garlic: this.garlic });
   }
 
   private hit(type: BaseObstacleType): void {
@@ -793,75 +771,30 @@ export class Game {
     this.play("hit");
   }
 
-  /** Unlocks each reward at most once per run (GAME-02). Returns rewards unlocked this frame. */
-  private checkUnlocks(distanceM: number): RewardId[] {
-    const setup = this.setup;
-    if (!setup) return [];
-    const now: RewardId[] = [];
-    for (const id of REWARD_IDS) {
-      if (this.unlocked.has(id) || !meetsRule(id, { distanceM, garlic: this.garlic }, setup.rules))
-        continue;
-      this.unlocked.add(id);
-      now.push(id);
-      const claimable = setup.claimable[id];
-      const text = () => this.unlockText(id, claimable);
-      this.banners.push({ reward: id, text, life: BANNER_S, max: BANNER_S });
-      const c = this.chick;
-      if (!this.opts.reducedMotion) this.burst(c.x + 8, c.y - 10, 26, CONFETTI, 110, 140, 1.2, 2);
-      this.play("unlock");
-      this.opts.onEvent({ type: "unlock", reward: id, claimable, text: text() });
-    }
-    return now;
-  }
-
-  private unlockText(id: RewardId, claimable: boolean): string {
-    const rules = this.setup?.rules ?? TUNING.rewards;
-    if (id === "free_coke") {
-      return claimable
-        ? this.t.t("unlock.coke")
-        : this.t.t("unlock.distance", { m: rules.free_coke.distanceM });
-    }
-    return claimable
-      ? this.t.t("unlock.garlic")
-      : this.t.t("unlock.garlicCount", { n: rules.free_garlic_sauce.garlic });
-  }
-
-  /** Distance milestones (GAME-05): 25, 50, 75, 100, then every 100 m. */
-  private checkMilestones(distanceM: number, unlockedNow: RewardId[]): void {
-    while (distanceM >= this.nextMilestone) {
-      const m = this.nextMilestone;
-      const list = TUNING.milestonesM;
-      this.milestoneIdx++;
+  /** Point milestones (GAME-05): 50, 100, 150, 200, then every 100 points. */
+  private checkMilestones(points: number): void {
+    const list = TUNING.milestonesPts;
+    while (points >= this.nextMilestone) {
+      const n = this.nextMilestone;
+      const i = this.milestoneIdx++;
       this.nextMilestone =
         this.milestoneIdx < list.length
           ? list[this.milestoneIdx]
-          : list[list.length - 1] + TUNING.milestoneEveryM * (this.milestoneIdx - list.length + 1);
-      this.opts.onEvent({ type: "milestone", m });
-      const cokeAt = this.setup?.rules.free_coke.distanceM;
-      if (m === cokeAt && unlockedNow.includes("free_coke")) continue; // the banner says it
-      const idx = this.milestoneIdx;
-      this.floatText(() => this.milestoneText(m, idx), W / 2, this.ground - 102, toum, 11, 1.6);
+          : list[list.length - 1] +
+            TUNING.milestoneEveryPts * (this.milestoneIdx - list.length + 1);
+      this.opts.onEvent({ type: "milestone", points: n });
+      this.floatText(() => this.milestoneText(n, i), W / 2, this.ground - 102, toum, 11, 1.6);
       this.play("mile");
     }
   }
 
-  private milestoneText(m: number, idx: number): string {
-    switch (m) {
-      case 25:
-        return this.t.t("milestone.m25");
-      case 50:
-        return this.setup?.claimable.free_coke && this.setup.rules.free_coke.distanceM === 100
-          ? this.t.t("milestone.m50")
-          : this.t.t("milestone.m50NoReward");
-      case 75:
-        return this.t.t("milestone.m75");
-      case 100:
-        return this.t.t("milestone.m100");
-      default: {
-        const quips = this.t.list("milestone.every", { m: this.t.num(m) });
-        return quips[idx % quips.length] ?? `${m} M`;
-      }
-    }
+  /** The i-th milestone's line: one each for the first few, then quips in turn. */
+  private milestoneText(n: number, i: number): string {
+    const first = TUNING.milestonesPts.length;
+    const vars = { n: this.t.num(n) };
+    if (i < first) return this.t.list("milestone.first", vars)[i] ?? `${n} PTS`;
+    const quips = this.t.list("milestone.every", vars);
+    return quips[(i - first) % quips.length] ?? `${n} PTS`;
   }
 
   private caught(): void {
@@ -891,13 +824,14 @@ export class Game {
   private finish(): void {
     const activeMs = Math.round(this.runTime * 1000);
     const recent = this.lastHit && this.runTime - this.lastHit.at < 2.5 ? this.lastHit.type : null;
+    const distanceM = distanceMAt(activeMs);
     const result: RunResult = {
       seed: this.setup?.seed ?? 0,
-      distanceM: distanceMAt(activeMs),
+      distanceM,
       garlic: this.garlic,
       hits: this.hits,
       activeMs,
-      unlocked: REWARD_IDS.filter((id) => this.unlocked.has(id)),
+      points: pointsOf({ distanceM, garlic: this.garlic }),
       cause: recent ?? "creep",
     };
     this.setState("over");
@@ -907,7 +841,6 @@ export class Game {
   private updateHud(): void {
     const { hud } = this.opts;
     const cache = this.hudCache;
-    const rules = this.setup?.rules ?? TUNING.rewards;
     const meter = Math.round((this.heat / HEAT.max) * 100);
     if (meter !== cache.meter) {
       cache.meter = meter;
@@ -918,33 +851,15 @@ export class Game {
       cache.level = level;
       hud.spit.dataset.level = level;
     }
-    const distanceM = pxToMetres(this.dist);
-    const goalM = rules.free_coke.distanceM;
-    const dist = `${this.t.num(distanceM)} m`;
-    if (dist !== cache.dist) {
-      cache.dist = dist;
-      hud.distanceValue.textContent = dist;
+    const points = this.t.num(this.points());
+    if (points !== cache.points) {
+      cache.points = points;
+      hud.points.textContent = points;
     }
-    const distDone = String(distanceM >= goalM);
-    if (distDone !== cache.distDone) {
-      cache.distDone = distDone;
-      hud.distance.dataset.done = distDone;
-    }
-    const bar = Math.min(100, Math.floor((distanceM / goalM) * 100));
-    if (bar !== cache.bar) {
-      cache.bar = bar;
-      hud.distanceBar.style.width = `${bar}%`;
-    }
-    const goal = rules.free_garlic_sauce.garlic;
-    const garlicDone = String(this.garlic >= goal);
-    const garlic = this.garlic >= goal ? this.t.num(this.garlic) : `${this.garlic}/${goal}`;
+    const garlic = this.t.num(this.garlic);
     if (garlic !== cache.garlic) {
       cache.garlic = garlic;
-      hud.garlicValue.textContent = garlic;
-    }
-    if (garlicDone !== cache.garlicDone) {
-      cache.garlicDone = garlicDone;
-      hud.garlic.dataset.done = garlicDone;
+      hud.garlic.textContent = garlic;
     }
   }
 
@@ -1221,36 +1136,6 @@ export class Game {
     ctx.fillText(str, px, py);
   }
 
-  private drawBanner(): void {
-    const b = this.banners[0];
-    if (!b || !this.fontReady) return;
-    const { ctx } = this;
-    const reduced = this.opts.reducedMotion;
-    const age = b.max - b.life;
-    const enter = reduced ? 1 : Math.min(1, age / 0.18);
-    const offset = Math.round((1 - enter) ** 3 * W); // ease-out slide from the right
-    const cy = Math.round(this.H * 0.3);
-    const h = 24;
-    ctx.globalAlpha = Math.min(1, b.life / 0.25);
-    ctx.fillStyle = SHADOW;
-    ctx.fillRect(offset, cy - h / 2 + 3, W, h);
-    ctx.fillStyle = navet;
-    ctx.fillRect(offset, cy - h / 2, W, h);
-    ctx.fillStyle = toum;
-    ctx.fillRect(offset, cy - h / 2 + 2, W, 1);
-    ctx.fillRect(offset, cy + h / 2 - 3, W, 1);
-    // Reward icons on Vert discs, like pickups, so a Tomate can still reads on Navet.
-    const icon = b.reward === "free_coke" ? this.sprites.can : this.sprites.cup;
-    for (const ix of [offset + 6, offset + W - 6 - 14]) {
-      ctx.drawImage(this.plate, ix, cy - 7);
-      ctx.drawImage(icon, ix + 3, cy - (icon.height >> 1));
-    }
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    this.text(b.text(), offset + W / 2, cy + 1, 10, toum, W - 44);
-    ctx.globalAlpha = 1;
-  }
-
   private render(): void {
     const { ctx, H, k } = this;
     const bd = this.backdrop;
@@ -1297,7 +1182,6 @@ export class Game {
       }
       ctx.globalAlpha = 1;
     }
-    this.drawBanner();
     if (state === "paused" || state === "countdown") {
       ctx.fillStyle = DIM;
       ctx.fillRect(-BLEED, -BLEED, W + 2 * BLEED, H + 2 * BLEED);

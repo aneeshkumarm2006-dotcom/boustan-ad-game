@@ -23,7 +23,6 @@ const schema = z.object({
   EMAIL_API_KEY: optional,
   EMAIL_FROM: z.string().default("Boustan <onboarding@resend.dev>"),
   EMAIL_REPLY_TO: optional,
-  EMAIL_WEBHOOK_SECRET: optional,
   EMAIL_SANDBOX: flag,
   UPSTASH_REDIS_REST_URL: optional,
   UPSTASH_REDIS_REST_TOKEN: optional,

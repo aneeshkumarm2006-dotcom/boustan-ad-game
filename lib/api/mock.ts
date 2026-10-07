@@ -1,59 +1,59 @@
 /**
  * In-browser mock of the game API, for development and the end-to-end suite without a
- * database (NEXT_PUBLIC_API_MODE=mock). It runs the server's run checks (game-core
- * validateRun, SEC-02), so client numbers are tested against them. State lives in localStorage
- * so reloads, "My rewards" and repeat claims behave like the real thing. Codes start with
- * TEST- and are worthless.
+ * database (NEXT_PUBLIC_API_MODE=mock). It applies the server's rules: the run checks of
+ * game-core validateRun (SEC-02), points from the speed curve at `activeMs` plus 10 per garlic,
+ * a best that only a strictly better run replaces, the leaderboard order (most points, then
+ * whoever got there first) and single-use save tokens that last 30 minutes. State lives in
+ * localStorage, so reloads and returning devices behave like the real thing.
  *
- * Scenarios for testing campaign states and failures, comma-separated in `?mock=`:
+ * Scenarios for testing contest states and failures, comma-separated in `?mock=`:
  *   offline        startRun fails, so the run plays with a local seed (§3.4)
- *   not_started    campaign hasn't started; ended: campaign is over
- *   claims_off     global claims_enabled kill switch is off
- *   soldout_coke   soldout_garlic   paused_coke   paused_garlic
- *   claim_error    the first claim attempt fails with a network error
+ *   not_started    the contest hasn't started; ended: the contest is over
+ *   board_off      the leaderboard switch is off
+ *   save_error     the first save attempt fails with a network error
  *   invalid        every finished run fails validation
  *   slow           every call takes 1.5 s
  */
 import {
-  DEFAULT_REWARD_RULES,
-  REWARD_IDS,
   TUNING,
   compareScores,
+  distanceMAt,
   isBetterScore,
-  unlockedRewards,
+  scoreOf,
   validateRun,
-  type RewardId,
   type RunScore,
 } from "@/game-core";
-import { normalizeEmail } from "@/lib/email";
+import { looksLikeEmail, normalizeEmail } from "@/lib/email";
+import { autoNickname, cleanNickname } from "@/lib/nicknames";
 import { readJson, writeJson } from "@/lib/storage";
 import {
   ApiError,
+  isContestOpen,
   type CampaignState,
-  type ClaimRequest,
-  type ClaimResponse,
   type FinishRunRequest,
   type FinishRunResponse,
   type GameApi,
   type LeaderboardEntry,
   type LeaderboardResponse,
+  type SaveScoreRequest,
+  type SaveScoreResponse,
   type StartRunResponse,
 } from "./types";
 
-const CLAIM_TOKEN_TTL_MS = 30 * 60 * 1000;
-const CODE_VALID_DAYS = 30;
+const SAVE_TOKEN_TTL_MS = 30 * 60 * 1000;
 
 interface MockRun {
   seed: number;
   issuedAt: number;
   used: boolean;
 }
-interface MockClaimToken {
-  runId: string;
-  unlocked: RewardId[];
+interface MockSaveToken {
   score: RunScore;
+  /** When the run finished: a saved best counts from then, as on the server. */
+  finishedAt: number;
   expiresAt: number;
-  used: boolean;
+  /** The player token it was spent for. */
+  usedBy: string | null;
 }
 interface MockPlayer {
   email: string;
@@ -63,24 +63,22 @@ interface MockPlayer {
 }
 interface MockDb {
   runs: Record<string, MockRun>;
-  claimTokens: Record<string, MockClaimToken>;
+  saveTokens: Record<string, MockSaveToken>;
   /** player token → player */
   players: Record<string, MockPlayer>;
-  /** normalized email → reward → code */
-  claims: Record<string, Partial<Record<RewardId, string>>>;
-  firstClaimFailed: boolean;
+  firstSaveFailed: boolean;
 }
 
-const EMPTY_DB: MockDb = {
-  runs: {},
-  claimTokens: {},
-  players: {},
-  claims: {},
-  firstClaimFailed: false,
-};
+const EMPTY_DB: MockDb = { runs: {}, saveTokens: {}, players: {}, firstSaveFailed: false };
 
 function isDb(value: unknown): value is MockDb {
-  return typeof value === "object" && value !== null && "runs" in value && "players" in value;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "runs" in value &&
+    "saveTokens" in value &&
+    "players" in value
+  );
 }
 
 function randomId(bytes = 16): string {
@@ -89,38 +87,28 @@ function randomId(bytes = 16): string {
   return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-function testCode(): string {
-  const buf = new Uint8Array(8);
-  crypto.getRandomValues(buf);
-  const chars = Array.from(buf, (b) => CROCKFORD[b & 31]).join("");
-  return `TEST-${chars.slice(0, 4)}-${chars.slice(4)}`;
-}
-
-const NAMES = [
-  "Toum Turbo 81",
-  "Falafel Rapide 27",
-  "Pita Pilote 12",
-  "Shawarma Express 44",
-  "Navet Ninja 9",
-  "Patate Pirate 63",
-  "Sumac Sonic 5",
-  "Taboulé Turbo 88",
-  "Fattouche Flash 31",
-  "Hummus Héros 70",
-  "Za'atar Zoom 16",
-  "Baklava Bolide 52",
+/** A believable board that the player's saved scores slot into, best first. */
+const FAKE_BOARD: { name: string; points: number }[] = [
+  { name: "Toum Turbo 81", points: 884 },
+  { name: "Falafel Zoom 27", points: 812 },
+  { name: "Pita Pilote 12", points: 745 },
+  { name: "Kafta Express 44", points: 690 },
+  { name: "Navet Ninja 9", points: 633 },
+  { name: "Patate Pirate 63", points: 571 },
+  { name: "Sumac Sonic 5", points: 528 },
+  { name: "Taboulé Turbo 88", points: 486 },
+  { name: "Labneh Flash 31", points: 441 },
+  { name: "Hummus Héros 70", points: 402 },
+  { name: "Za'atar Zoom 16", points: 367 },
+  { name: "Baklava Bolide 5", points: 330 },
 ];
 
-/** A believable board that the player's saved scores slot into. */
-function fakeBoard(): (RunScore & { name: string; at: number })[] {
-  return NAMES.map((name, i) => ({
-    name,
-    garlic: Math.max(2, 24 - i * 2 - (i % 3)),
-    hits: i % 4,
-    distanceM: 420 - i * 27,
-    at: i,
-  }));
+interface Row {
+  name: string;
+  points: number;
+  /** When the score was reached: equal points go to whoever got there first. */
+  at: number;
+  token: string;
 }
 
 export function createMockApi(search: string): GameApi {
@@ -134,43 +122,47 @@ export function createMockApi(search: string): GameApi {
   const latency = has("slow") ? 1500 : 120;
   const wait = () => new Promise<void>((resolve) => setTimeout(resolve, latency));
 
-  const load = (): MockDb => ({ ...EMPTY_DB, ...readJson("mock-db", isDb) });
+  const load = (): MockDb => readJson("mock-db", isDb) ?? structuredClone(EMPTY_DB);
   const save = (db: MockDb) => writeJson("mock-db", db);
 
   function campaign(): CampaignState {
     const day = 24 * 60 * 60 * 1000;
     const now = Date.now();
     const status = has("not_started") ? "not_started" : has("ended") ? "ended" : "active";
-    const reward = (id: "coke" | "garlic") =>
-      has(`soldout_${id}`)
-        ? ({ available: false, reason: "sold_out" } as const)
-        : has(`paused_${id}`)
-          ? ({ available: false, reason: "paused" } as const)
-          : ({ available: true } as const);
     return {
       status,
       startsAt: new Date(status === "not_started" ? now + 3 * day : now - 3 * day).toISOString(),
       endsAt: new Date(status === "ended" ? now - day : now + 27 * day).toISOString(),
-      claimsEnabled: !has("claims_off"),
-      rules: DEFAULT_REWARD_RULES,
-      rewards: { free_coke: reward("coke"), free_garlic_sauce: reward("garlic") },
+      leaderboardOpen: !has("board_off"),
     };
   }
 
-  function rankOf(db: MockDb, score: RunScore, at: number, exceptToken?: string): number {
-    const rows = [
-      ...fakeBoard(),
-      ...Object.entries(db.players)
-        .filter(([token, p]) => token !== exceptToken && p.best)
-        .map(([, p]) => ({ ...(p.best as RunScore), at: p.bestAt })),
-    ];
-    return (
-      1 +
-      rows.filter(
-        (r) => compareScores(r, score) < 0 || (compareScores(r, score) === 0 && r.at < at),
-      ).length
-    );
+  /** The fake board and every saved best, in leaderboard order. */
+  function board(db: MockDb): Row[] {
+    return [
+      // The fake players got there long ago, so they win ties.
+      ...FAKE_BOARD.map((r, i) => ({ ...r, at: i, token: "" })),
+      ...Object.entries(db.players).flatMap(([token, p]) =>
+        p.best ? [{ name: p.nickname, points: p.best.points, at: p.bestAt, token }] : [],
+      ),
+    ].sort((a, b) => compareScores(a, b) || a.at - b.at);
   }
+
+  /** 1 + the rows ranked above `points` reached at `at`, leaving out the player's own row. */
+  function rankOf(db: MockDb, points: number, at: number, exceptToken?: string): number {
+    const above = board(db).filter(
+      (r) =>
+        r.token !== exceptToken &&
+        (compareScores(r, { points }) < 0 || (r.points === points && r.at < at)),
+    );
+    return 1 + above.length;
+  }
+
+  const entry = (r: Row, i: number): LeaderboardEntry => ({
+    rank: i + 1,
+    name: r.name,
+    points: r.points,
+  });
 
   return {
     async startRun(): Promise<StartRunResponse> {
@@ -193,7 +185,6 @@ export function createMockApi(search: string): GameApi {
       const db = load();
       const run = db.runs[runId];
       const now = Date.now();
-      const score: RunScore = { distanceM: req.distance, garlic: req.garlic, hits: req.hits };
       const valid =
         !has("invalid") &&
         run !== undefined &&
@@ -209,143 +200,96 @@ export function createMockApi(search: string): GameApi {
         save(db);
         return {
           valid: false,
-          unlocked: [],
-          claimToken: null,
+          points: 0,
+          saveToken: null,
           best: null,
           rankPreview: null,
           rank: null,
         };
       }
-      const c = campaign();
-      const open = c.status === "active" && c.claimsEnabled;
-      const unlocked = open
-        ? unlockedRewards(score, c.rules).filter((id) => c.rewards[id].available)
-        : [];
-      const claimToken = randomId();
-      db.claimTokens[claimToken] = {
-        runId,
-        unlocked,
-        score,
-        expiresAt: now + CLAIM_TOKEN_TTL_MS,
-        used: false,
-      };
+      // Scored from the curve at the run's play time, as on the server.
+      const score = scoreOf({ distanceM: distanceMAt(req.activeMs), garlic: req.garlic });
+      const open = isContestOpen(campaign());
       const player = playerToken ? db.players[playerToken] : undefined;
-      // A known player's best is saved at finish, as on the server (LB-02).
-      if (player && (!player.best || isBetterScore(score, player.best))) {
+      // A known device is saved as it finishes (LB-02), while the contest is open.
+      if (player && open && isBetterScore(score, player.best)) {
         player.best = score;
         player.bestAt = now;
       }
-      const best = player?.best ?? score;
+      // Only a new player needs a token to put the run on the board.
+      let saveToken: string | null = null;
+      if (open && !player) {
+        saveToken = randomId();
+        db.saveTokens[saveToken] = {
+          score,
+          finishedAt: now,
+          expiresAt: now + SAVE_TOKEN_TTL_MS,
+          usedBy: null,
+        };
+      }
       save(db);
       return {
         valid: true,
-        unlocked,
-        claimToken,
-        best: player ? best : null,
-        rankPreview: rankOf(db, score, now, playerToken),
-        rank: player?.best ? rankOf(db, player.best, player.bestAt, playerToken) : null,
+        points: score.points,
+        saveToken,
+        best: player?.best ?? null,
+        rankPreview: open ? rankOf(db, score.points, now, playerToken) : null,
+        rank: player?.best ? rankOf(db, player.best.points, player.bestAt, playerToken) : null,
       };
     },
 
-    async claim(req: ClaimRequest): Promise<ClaimResponse> {
+    async saveScore(req: SaveScoreRequest): Promise<SaveScoreResponse> {
       await wait();
       const db = load();
-      if (has("claim_error") && !db.firstClaimFailed) {
-        db.firstClaimFailed = true;
+      if (has("save_error") && !db.firstSaveFailed) {
+        db.firstSaveFailed = true;
         save(db);
         throw new ApiError("network");
       }
-      const token = db.claimTokens[req.claimToken];
-      if (!token || token.used || Date.now() > token.expiresAt) throw new ApiError("expired");
-      if (!req.termsAge) throw new ApiError("rejected");
+      const token = db.saveTokens[req.saveToken];
+      if (!token) throw new ApiError("rejected");
+      if (Date.now() > token.expiresAt) throw new ApiError("expired");
+      if (!looksLikeEmail(req.email) || !req.termsAge) throw new ApiError("rejected");
+      if (!isContestOpen(campaign())) throw new ApiError("closed");
 
-      let playerToken =
-        req.playerToken && db.players[req.playerToken] ? req.playerToken : undefined;
-      const email = playerToken ? db.players[playerToken].email : req.email?.trim();
-      if (!email) throw new ApiError("rejected");
-      const normalized = normalizeEmail(email);
-      if (!playerToken) {
-        playerToken =
-          Object.entries(db.players).find(([, p]) => normalizeEmail(p.email) === normalized)?.[0] ??
-          randomId();
-      }
-      const now = Date.now();
-      const existing = db.players[playerToken];
-      const player: MockPlayer = existing ?? { email, nickname: "", best: null, bestAt: now };
-      if (req.nickname?.trim()) player.nickname = req.nickname.trim();
-      if (!player.nickname) player.nickname = NAMES[Math.floor(Math.random() * NAMES.length)];
+      const normalized = normalizeEmail(req.email);
+      const known = Object.entries(db.players).find(
+        ([, p]) => normalizeEmail(p.email) === normalized,
+      )?.[0];
+      // A spent token from the same player is a retry after a lost response: answer the same.
+      if (token.usedBy !== null && token.usedBy !== known) throw new ApiError("expired");
+      const playerToken = known ?? randomId();
+      const player: MockPlayer = db.players[playerToken] ?? {
+        email: req.email.trim(),
+        nickname: "",
+        best: null,
+        bestAt: token.finishedAt,
+      };
+      const nickname = cleanNickname(req.nickname);
+      if (nickname) player.nickname = nickname;
+      if (!player.nickname) player.nickname = autoNickname();
       if (isBetterScore(token.score, player.best)) {
         player.best = token.score;
-        player.bestAt = now;
+        player.bestAt = token.finishedAt;
       }
       db.players[playerToken] = player;
-
-      const c = campaign();
-      const claimed = (db.claims[normalized] ??= {});
-      const codes: ClaimResponse["codes"] = [];
-      const alreadyClaimed: RewardId[] = [];
-      const unavailable: RewardId[] = [];
-      for (const reward of REWARD_IDS.filter((id) => token.unlocked.includes(id))) {
-        if (claimed[reward]) {
-          alreadyClaimed.push(reward);
-        } else if (!c.rewards[reward].available) {
-          unavailable.push(reward);
-        } else {
-          const code = testCode();
-          claimed[reward] = code;
-          codes.push({
-            reward,
-            code,
-            expiresAt: new Date(now + CODE_VALID_DAYS * 24 * 60 * 60 * 1000).toISOString(),
-          });
-        }
-      }
-      token.used = true;
+      token.usedBy = playerToken;
       save(db);
       return {
-        codes,
-        alreadyClaimed,
-        unavailable,
         playerToken,
-        rank: player.best ? rankOf(db, player.best, player.bestAt, playerToken) : null,
+        rank: player.best ? rankOf(db, player.best.points, player.bestAt, playerToken) : null,
+        best: player.best,
       };
-    },
-
-    async resend() {
-      await wait();
     },
 
     async leaderboard(limit: number, playerToken?: string): Promise<LeaderboardResponse> {
       await wait();
-      const db = load();
-      const rows = [
-        ...fakeBoard().map((r) => ({ ...r, token: "" })),
-        ...Object.entries(db.players)
-          .filter(([, p]) => p.best)
-          .map(([token, p]) => ({
-            ...(p.best as RunScore),
-            name: p.nickname,
-            at: p.bestAt,
-            token,
-          })),
-      ].sort((a, b) => compareScores(a, b) || a.at - b.at);
-      const entries = rows.map((r, i): LeaderboardEntry & { token: string } => ({
-        rank: i + 1,
-        name: r.name,
-        garlic: r.garlic,
-        hits: r.hits,
-        distanceM: r.distanceM,
-        token: r.token,
-      }));
-      const strip = (e: LeaderboardEntry & { token: string }): LeaderboardEntry => ({
-        rank: e.rank,
-        name: e.name,
-        garlic: e.garlic,
-        hits: e.hits,
-        distanceM: e.distanceM,
-      });
-      const mine = playerToken ? entries.find((e) => e.token === playerToken) : undefined;
-      return { top: entries.slice(0, limit).map(strip), me: mine ? strip(mine) : undefined };
+      const rows = board(load());
+      const mine = playerToken ? rows.findIndex((r) => r.token === playerToken) : -1;
+      return {
+        top: rows.slice(0, limit).map(entry),
+        ...(mine >= 0 ? { me: entry(rows[mine], mine) } : {}),
+      };
     },
   };
 }

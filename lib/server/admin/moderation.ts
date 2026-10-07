@@ -1,8 +1,11 @@
 /**
- * Moderation views (ADM-05, LB-07): the board as admins see it, with ids and emails and the
- * hidden entries, and the runs the validator flagged.
+ * Leaderboard views for the admin (ADM-05, LB-07): the board as admins see it, with ids and
+ * emails and the hidden entries; the winners with what Boustan needs to reach them and to judge
+ * their run; and the runs the validator flagged.
  */
 import type { Queryable } from "@/db/client";
+import type { BestRunDoc } from "@/db/schema";
+import { WINNERS, createLevel } from "@/game-core";
 import { RANK_ORDER } from "../leaderboard";
 
 export interface ModerationEntry {
@@ -12,9 +15,9 @@ export interface ModerationEntry {
   nickname: string | null;
   email: string;
   hidden: boolean;
-  garlic: number;
-  hits: number;
+  points: number;
   distanceM: number;
+  garlic: number;
   achievedAt: Date;
 }
 
@@ -36,10 +39,76 @@ export async function boardForModeration(q: Queryable, limit = 200): Promise<Mod
         nickname: p.nickname,
         email: p.email,
         hidden: p.hidden,
-        garlic: b.garlic,
-        hits: b.hits,
+        points: b.points,
         distanceM: b.distanceM,
+        garlic: b.garlic,
         achievedAt: b.achievedAt,
+      },
+    ];
+  });
+}
+
+/**
+ * The best runs at the top of the public board, in its order, hidden players left out: the
+ * first `WINNERS` of them win if the contest ends now.
+ */
+export async function topBestRuns(q: Queryable, n: number = WINNERS): Promise<BestRunDoc[]> {
+  const hidden = await q.players.find({ hidden: true }, { projection: { _id: 1 } }).toArray();
+  return q.bestRuns
+    .find(hidden.length > 0 ? { _id: { $nin: hidden.map((h) => h._id) } } : {})
+    .sort(RANK_ORDER)
+    .limit(n)
+    .toArray();
+}
+
+/** Ids of the current winners: the top `WINNERS` players on the public board. */
+export async function winnerIds(q: Queryable): Promise<string[]> {
+  return (await topBestRuns(q)).map((b) => b._id);
+}
+
+export interface Winner extends Omit<ModerationEntry, "rank" | "hidden"> {
+  rank: number;
+  language: string;
+  marketingOptIn: boolean;
+  runId: string;
+  /**
+   * From the best run's own row, to judge whether a person played it. Null when the row is
+   * missing.
+   */
+  activeMs: number | null;
+  hits: number | null;
+  /** Garlic the level put out up to the run's distance; collecting all of it is suspicious. */
+  garlicAppeared: number | null;
+}
+
+/** The top `WINNERS` visible players, with their contact details and their best run's numbers. */
+export async function winners(q: Queryable): Promise<Winner[]> {
+  const best = await topBestRuns(q);
+  const ids = best.map((b) => b._id);
+  const owners = await q.players.find({ _id: { $in: ids } }).toArray();
+  const runs = await q.runs.find({ _id: { $in: best.map((b) => b.runId) } }).toArray();
+  const byId = new Map(owners.map((p) => [p._id, p]));
+  const runOf = new Map(runs.map((r) => [r._id, r]));
+  return best.flatMap((b, i) => {
+    const p = byId.get(b._id);
+    if (!p) return [];
+    const run = runOf.get(b.runId);
+    return [
+      {
+        playerId: p._id,
+        rank: i + 1,
+        nickname: p.nickname,
+        email: p.email,
+        language: p.language,
+        marketingOptIn: p.marketingOptIn,
+        points: b.points,
+        distanceM: b.distanceM,
+        garlic: b.garlic,
+        achievedAt: b.achievedAt,
+        runId: b.runId,
+        activeMs: run?.activeMs ?? null,
+        hits: run?.hits ?? null,
+        garlicAppeared: run ? createLevel(run.seed).garlicSpawnedUpTo(run.distanceM) : null,
       },
     ];
   });

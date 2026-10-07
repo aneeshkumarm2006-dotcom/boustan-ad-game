@@ -100,7 +100,7 @@ export function captureException(error: unknown, tags: Tags = {}): Promise<void>
 
 /**
  * A message event. `fingerprint` groups repeats into one Sentry issue, which an issue alert
- * rule turns into an email or Slack ping (claim error rate, bounce spikes).
+ * rule turns into an email or Slack ping (the save error rate).
  */
 export function captureMessage(
   message: string,

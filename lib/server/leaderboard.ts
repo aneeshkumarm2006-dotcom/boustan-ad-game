@@ -1,7 +1,7 @@
 /**
- * Best runs and ranks (LB-01 to LB-03). Order: most garlic, fewest hits, longest distance, then
- * whoever got there first. Only players with an email have a row, and hidden or deleted
- * players don't count.
+ * Best runs and ranks (LB-01 to LB-03). Order: most points, then whoever got there first. The
+ * top WINNERS entries win. Only players with an email have a row, and hidden or deleted players
+ * don't count.
  *
  * Hidden players are few, so every query looks them up and leaves them out by id. A deleted
  * player never has a row here: erasing one removes it in the same transaction (DATA-07).
@@ -12,23 +12,13 @@ import type { BestRunDoc } from "@/db/schema";
 import type { RunScore } from "@/game-core";
 import type { LeaderboardEntry } from "@/lib/api/types";
 
-/** The LB-01 order. The player id (`_id`) makes it total; best_runs_rank_idx serves it. */
-export const RANK_ORDER = { garlic: -1, hits: 1, distanceM: -1, achievedAt: 1, _id: 1 } as const;
+/** The LB-01 order. The player id (`_id`) makes it total; best_runs_points_idx serves it. */
+export const RANK_ORDER = { points: -1, achievedAt: 1, _id: 1 } as const;
 
 /** best_runs rows that rank strictly above `s`, before tie-breaks. */
-const above = (s: RunScore): Filter<BestRunDoc> => ({
-  $or: [
-    { garlic: { $gt: s.garlic } },
-    { garlic: s.garlic, hits: { $lt: s.hits } },
-    { garlic: s.garlic, hits: s.hits, distanceM: { $gt: s.distanceM } },
-  ],
-});
+const above = (s: Pick<RunScore, "points">): Filter<BestRunDoc> => ({ points: { $gt: s.points } });
 
-const same = (s: RunScore): Filter<BestRunDoc> => ({
-  garlic: s.garlic,
-  hits: s.hits,
-  distanceM: s.distanceM,
-});
+const same = (s: Pick<RunScore, "points">): Filter<BestRunDoc> => ({ points: s.points });
 
 /** Ids of the players moderated off the board. */
 async function hiddenIds(q: Queryable): Promise<string[]> {
@@ -51,27 +41,13 @@ export async function updateBestRun(
 ): Promise<void> {
   const next = {
     runId: run.runId,
-    garlic: run.garlic,
-    hits: run.hits,
+    points: run.points,
     distanceM: run.distanceM,
+    garlic: run.garlic,
     achievedAt: run.at,
   };
   const better = {
-    $or: [
-      { $eq: [{ $type: "$garlic" }, "missing"] },
-      { $gt: [run.garlic, "$garlic"] },
-      {
-        $and: [
-          { $eq: [run.garlic, "$garlic"] },
-          {
-            $or: [
-              { $lt: [run.hits, "$hits"] },
-              { $and: [{ $eq: [run.hits, "$hits"] }, { $gt: [run.distanceM, "$distanceM"] }] },
-            ],
-          },
-        ],
-      },
-    ],
+    $or: [{ $eq: [{ $type: "$points" }, "missing"] }, { $gt: [run.points, "$points"] }],
   };
   await q.bestRuns.updateOne(
     { _id: playerId },
@@ -89,7 +65,7 @@ export async function updateBestRun(
 export async function bestOf(q: Queryable, playerId: string): Promise<RunScore | null> {
   return q.bestRuns.findOne<RunScore>(
     { _id: playerId },
-    { projection: { _id: 0, garlic: 1, hits: 1, distanceM: 1 } },
+    { projection: { _id: 0, points: 1, distanceM: 1, garlic: 1 } },
   );
 }
 
@@ -99,7 +75,7 @@ export async function bestOf(q: Queryable, playerId: string): Promise<RunScore |
  */
 export async function rankPreview(
   q: Queryable,
-  score: RunScore,
+  score: Pick<RunScore, "points">,
   exceptPlayerId: string | null,
 ): Promise<number> {
   const skip = await hiddenIds(q);
@@ -142,14 +118,11 @@ export const BOARD_CACHE_MS = 30_000;
 
 const toEntry = (
   rank: number,
-  row: { nickname: string | null; garlic: number; hits: number; distanceM: number },
+  row: { nickname: string | null; points: number },
 ): LeaderboardEntry => ({
   rank,
   name: row.nickname ?? "—",
-  garlic: row.garlic,
-  hits: row.hits,
-  // The game shows whole metres.
-  distanceM: Math.floor(row.distanceM),
+  points: row.points,
 });
 
 /** The top of the board in LB-01 order. Names only: no email ever leaves this file (LB-05). */

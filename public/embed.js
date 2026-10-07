@@ -2,7 +2,8 @@
  * <div data-boustan-game data-lang="fr" data-src="PARTNER_ID"></div>
  * <script src="https://GAME_HOST/embed.js" async></script>
  * Optional: data-utm-source, data-utm-medium, data-utm-campaign, data-utm-content, data-muted.
- * Game events go to window.dataLayer as boustan_game_<type>; send commands with
+ * Game events go to window.dataLayer as boustan_game_<type> (ready, game_start, milestone,
+ * game_over, save_view, score_saved, leaderboard_view, cta_click); send commands with
  * window.boustanGame.send("pause" | "resume" | "mute" | "setLanguage", value).
  */
 (function () {

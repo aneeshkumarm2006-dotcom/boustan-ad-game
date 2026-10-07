@@ -1,16 +1,15 @@
 /**
- * Admin player tools (ADM-04, ADM-05, DATA-07): search, one player's full record, resend a
- * coupon, export, hide or rename on the leaderboard, and erase.
+ * Admin player tools (ADM-04, ADM-05, DATA-07): search, one player's full record, export, hide
+ * or rename on the leaderboard, and erase.
  *
  * Erasing removes the personal data (email, nickname, consent log with its IP addresses,
  * device tokens) and the leaderboard row, and keeps anonymous totals: the player row stays
- * with an anonymized address so runs, claims and codes still add up (DATA-07).
+ * with an anonymized address so runs still add up (DATA-07).
  */
 import type { Db, Queryable } from "@/db/client";
 import type { PlayerDoc } from "@/db/schema";
 import { autoNickname } from "@/lib/nicknames";
 import { isValidNickname } from "@/lib/email";
-import { queueResend } from "../email/deliver";
 
 export type PlayerRow = PlayerDoc;
 
@@ -25,7 +24,8 @@ export interface PlayerSummary {
   hidden: boolean;
   marketingOptIn: boolean;
   createdAt: Date;
-  claimCount: number;
+  /** Points of the player's best run; null without one. */
+  bestPoints: number | null;
 }
 
 /** Players whose email or nickname contains the term; the newest 50 when the term is empty. */
@@ -41,13 +41,10 @@ export async function searchPlayers(
     .sort({ createdAt: -1 })
     .limit(limit)
     .toArray();
-  const counts = await q.claims
-    .aggregate<{ _id: string; n: number }>([
-      { $match: { playerId: { $in: rows.map((p) => p._id) } } },
-      { $group: { _id: "$playerId", n: { $sum: 1 } } },
-    ])
+  const best = await q.bestRuns
+    .find({ _id: { $in: rows.map((p) => p._id) } }, { projection: { points: 1 } })
     .toArray();
-  const claimCount = new Map(counts.map((c) => [c._id, c.n]));
+  const pointsOf = new Map(best.map((b) => [b._id, b.points]));
   return rows.map((p) => ({
     id: p._id,
     email: p.email,
@@ -56,7 +53,7 @@ export async function searchPlayers(
     hidden: p.hidden,
     marketingOptIn: p.marketingOptIn,
     createdAt: p.createdAt,
-    claimCount: claimCount.get(p._id) ?? 0,
+    bestPoints: pointsOf.get(p._id) ?? null,
   }));
 }
 
@@ -69,50 +66,16 @@ export async function playerDetail(q: Queryable, id: string) {
     .sort({ finishedAt: -1 })
     .limit(50)
     .toArray();
-  const claimRows = await q.claims.find({ playerId: id }).sort({ createdAt: -1 }).toArray();
-  const held = await q.codes
-    .find({ _id: { $in: claimRows.flatMap((c) => (c.codeId ? [c.codeId] : [])) } })
-    .toArray();
-  const codeOf = new Map(held.map((c) => [c._id.toHexString(), c]));
-  const playerClaims = claimRows.map((c) => {
-    const code = c.codeId ? codeOf.get(c.codeId.toHexString()) : undefined;
-    return {
-      id: c._id,
-      reward: c.rewardId,
-      code: code?.code ?? null,
-      codeStatus: code?.status ?? null,
-      expiresAt: c.expiresAt,
-      emailStatus: c.emailStatus,
-      src: c.src,
-      createdAt: c.createdAt,
-    };
-  });
   const playerConsents = await q.consents
     .find({ playerId: id })
     .sort({ createdAt: -1, _id: -1 })
     .toArray();
-  const emailRows = await q.emailOutbox
-    .find({ playerId: id })
-    .sort({ createdAt: -1 })
-    .limit(20)
-    .toArray();
-  const emails = emailRows.map((e) => ({
-    id: e._id,
-    kind: e.kind,
-    status: e.status,
-    attempts: e.attempts,
-    lastError: e.lastError,
-    createdAt: e.createdAt,
-    sentAt: e.sentAt,
-  }));
   const devices = await q.playerTokens.countDocuments({ playerId: id });
   return {
     player,
     best,
     runs: playerRuns,
-    claims: playerClaims,
     consents: playerConsents,
-    emails,
     devices,
   };
 }
@@ -135,24 +98,23 @@ export async function exportPlayer(q: Queryable, id: string) {
       firstSrc: player.firstSrc,
       firstHost: player.firstHost,
       utm: player.utm,
-      emailBlockedAt: player.emailBlockedAt,
       createdAt: player.createdAt,
       lastSeenAt: player.lastSeenAt,
     },
     bestRun: best
       ? {
-          playerId: best._id,
-          runId: best.runId,
-          garlic: best.garlic,
-          hits: best.hits,
+          points: best.points,
           distanceM: best.distanceM,
+          garlic: best.garlic,
           achievedAt: best.achievedAt,
+          runId: best.runId,
         }
       : null,
     runs: detail.runs.map((r) => ({
       id: r._id,
       finishedAt: r.finishedAt,
       status: r.status,
+      points: r.points,
       distanceM: r.distanceM,
       garlic: r.garlic,
       hits: r.hits,
@@ -161,7 +123,6 @@ export async function exportPlayer(q: Queryable, id: string) {
       hostOrigin: r.hostOrigin,
       utm: r.utm,
     })),
-    claims: detail.claims,
     consents: detail.consents.map((c) => ({
       id: c._id.toHexString(),
       playerId: c.playerId,
@@ -176,7 +137,6 @@ export async function exportPlayer(q: Queryable, id: string) {
       hostOrigin: c.hostOrigin,
       createdAt: c.createdAt,
     })),
-    emails: detail.emails,
   };
 }
 
@@ -192,8 +152,8 @@ export async function erasePlayer(
   now = new Date(),
 ): Promise<{ consentRows: number; devices: number } | null> {
   return q.transaction(async (tx) => {
-    // Anonymizing first is also the claim on the player: a claim or unsubscribe running at the
-    // same moment conflicts with this write and starts over, finding the player gone.
+    // Anonymizing first is also the claim on the player: a save running at the same moment
+    // conflicts with this write and starts over, finding the player gone.
     const player = await tx.players.findOneAndUpdate(
       { _id: id, deletedAt: null },
       {
@@ -206,8 +166,6 @@ export async function erasePlayer(
           marketingOptIn: false,
           hidden: false,
           crmStatus: "skipped",
-          emailBlockedAt: now,
-          emailBlockReason: "erased",
           deletedAt: now,
         },
       },
@@ -221,28 +179,8 @@ export async function erasePlayer(
       { playerId: id, status: "pending" },
       { $set: { status: "skipped", lastError: "player erased" } },
     );
-    await tx.emailOutbox.updateMany(
-      { playerId: id, status: { $in: ["pending", "retry", "sending"] } },
-      { $set: { status: "blocked", lastError: "player erased", leaseUntil: null } },
-    );
     return { consentRows: consents.deletedCount, devices: devices.deletedCount };
   });
-}
-
-/** Queues a re-send of every code a player holds. Null when there is nothing to send. */
-export async function queueCouponResend(q: Db, id: string): Promise<string | null> {
-  const player = await q.players.findOne({ _id: id, deletedAt: null });
-  if (!player || player.emailBlockedAt) return null;
-  const owned = await q.claims
-    .find({ playerId: id, codeId: { $ne: null } }, { projection: { _id: 1 } })
-    .toArray();
-  return queueResend(
-    q,
-    id,
-    owned.map((c) => c._id),
-    player.language,
-    null,
-  );
 }
 
 // ---------- leaderboard moderation (LB-07) ----------

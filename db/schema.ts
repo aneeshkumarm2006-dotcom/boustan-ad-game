@@ -1,22 +1,24 @@
 /**
- * Database schema (PRD §15.2), MongoDB through the official driver. Collections, indexes and
- * validators are created by `npm run db:migrate` (see ./migrations.ts); this file is their single
- * source of truth.
+ * Database schema, MongoDB through the official driver. Collections, indexes and validators are
+ * created by `npm run db:migrate` (see ./migrations.ts); this file is their single source of
+ * truth.
+ *
+ * The game is a points contest: a run is worth 1 point per metre plus 10 per garlic, and the top
+ * 3 players on the leaderboard win. There are no rewards, codes or coupon emails, so there are no
+ * collections for them (migration 0001 drops the ones an older database still has).
  *
  * MongoDB has no column defaults, so every `new*` builder below fills them in. Insert through the
  * builders and a document always carries every field, with `null` for "no value".
  *
- * Ids: players, runs, claims and emails use a UUID string as `_id`. Codes, consents and the
- * outboxes use an ObjectId, which sorts in insertion order (the oldest code goes first, RWD-03).
- * Player tokens use the token hash as `_id` and best runs use the player's id, so the database
- * itself keeps them to one per token and one per player.
+ * Ids: players, runs and emails use a UUID string as `_id`. Consents and the CRM outbox use an
+ * ObjectId, which sorts in insertion order. Player tokens use the token hash as `_id` and best
+ * runs use the player's id, so the database itself keeps them to one per token and one per player.
  *
- * Additions to §15.2:
  * - `player_tokens`: one row per device, so a second host site or phone gets its own token
- *   without signing the first one out (§3.4). Only SHA-256 hashes are stored (DATA-01).
+ *   without signing the first one out. Only SHA-256 hashes are stored (DATA-01).
  * - `best_runs`: each player's best validated run, which the leaderboard reads (LB-02).
- * - `campaign_settings`: dates and the global claims switch, editable without a redeploy (ADM-07).
- * - `email_outbox`: coupon emails waiting to be sent or retried (MAIL-02, MAIL-07).
+ * - `campaign_settings`: the contest dates and the leaderboard switch, editable without a
+ *   redeploy (ADM-07).
  * - `events_daily`: the daily analytics rollup (AN-02).
  */
 import { randomUUID } from "node:crypto";
@@ -25,13 +27,6 @@ import { ObjectId, type CreateIndexesOptions, type Document } from "mongodb";
 export type Utm = Partial<
   Record<"utm_source" | "utm_medium" | "utm_campaign" | "utm_content", string>
 >;
-/** Thresholds a run was started under (ADM-07: setting changes apply to new runs only). */
-export interface RunRules {
-  distanceM: number;
-  garlic: number;
-}
-export type Localized = { fr: string; en: string };
-export type RewardRule = { distanceM: number } | { garlic: number };
 
 /** Collection names by the key the app uses for them (`db.players`, `tx.bestRuns`...). */
 export const COLLECTIONS = {
@@ -41,10 +36,6 @@ export const COLLECTIONS = {
   runs: "runs",
   bestRuns: "best_runs",
   campaignSettings: "campaign_settings",
-  rewards: "rewards",
-  codes: "codes",
-  claims: "claims",
-  emailOutbox: "email_outbox",
   crmOutbox: "crm_outbox",
   events: "events",
   eventsDaily: "events_daily",
@@ -52,11 +43,8 @@ export const COLLECTIONS = {
 } as const;
 export type CollectionKey = keyof typeof COLLECTIONS;
 
-/**
- * Stands in for "no expiry" when an aggregation compares a code's `expiresAt`, which is null
- * for codes that never expire: `{ $ifNull: ["$expiresAt", NO_EXPIRY] }` then compares as a date.
- */
-export const NO_EXPIRY = new Date(8.64e15);
+/** Collections of the old rewards-and-coupons design, which migration 0001 removes. */
+export const LEGACY_COLLECTIONS = ["rewards", "codes", "claims", "email_outbox"] as const;
 
 // ---------------------------------------------------------------------------------------------
 // Players and consent
@@ -64,9 +52,9 @@ export const NO_EXPIRY = new Date(8.64e15);
 
 export interface PlayerDoc {
   _id: string;
-  /** As typed; the only address emails go to (RWD-05, MAIL-08). */
+  /** As typed; the address Boustan uses to reach the winners. */
   email: string;
-  /** One claim per person per reward (SEC-07). Anonymized when a player is deleted. */
+  /** One player per address (SEC-07). Anonymized when a player is deleted. */
   emailNormalized: string;
   nickname: string | null;
   /** Moderated off the leaderboard; stays hidden if they come back with the same email (LB-07). */
@@ -77,9 +65,6 @@ export interface PlayerDoc {
   firstSrc: string | null;
   firstHost: string | null;
   utm: Utm;
-  /** Set by a hard bounce, complaint or suppression; no email is sent after that (MAIL-07). */
-  emailBlockedAt: Date | null;
-  emailBlockReason: string | null;
   /** pending | synced | failed | skipped (DATA-02, CRM-05). */
   crmStatus: string;
   crmSyncedAt: Date | null;
@@ -111,7 +96,7 @@ export interface ConsentDoc {
   text: string;
   textVersion: string;
   language: string;
-  /** claim_form | unsubscribe | complaint */
+  /** save_form */
   source: string;
   ip: string | null;
   userAgent: string | null;
@@ -132,36 +117,41 @@ export interface RunDoc {
   hostOrigin: string | null;
   utm: Utm;
   language: string | null;
-  rules: RunRules;
   tuningVersion: number;
   issuedAt: Date;
   finishedAt: Date;
   activeMs: number;
+  /** Metres as the client reported them (within 2% of the curve, or the run is flagged). */
   distanceM: number;
   garlic: number;
   hits: number;
+  /**
+   * Points the server awarded: whole metres of the curve at `activeMs` plus 10 per garlic. A
+   * flagged run earns 0.
+   */
+  points: number;
   /** valid | flagged (SEC-03) */
   status: string;
   flagReason: string | null;
   clientVersion: string | null;
-  /** Set when its claim token is spent, so each token works once (SEC-04). */
-  claimedAt: Date | null;
+  /** Set when its save token is spent, so each token works once (SEC-04). */
+  savedAt: Date | null;
 }
 
-/** Each player's best validated run under the leaderboard order (LB-01, LB-02). */
+/** Each player's best validated run (LB-01, LB-02). */
 export interface BestRunDoc {
   /** The player's id: one best run per player. */
   _id: string;
   runId: string;
-  garlic: number;
-  hits: number;
+  points: number;
   distanceM: number;
-  /** Ties go to whoever got there first (LB-01). */
+  garlic: number;
+  /** Equal points go to whoever got there first (LB-01). */
   achievedAt: Date;
 }
 
 // ---------------------------------------------------------------------------------------------
-// Campaign, rewards and codes
+// Contest settings
 // ---------------------------------------------------------------------------------------------
 
 /** One document (_id = 1). Edited from the admin or `npm run campaign` (SEC-08). */
@@ -169,100 +159,26 @@ export interface CampaignSettingsDoc {
   _id: number;
   startsAt: Date | null;
   endsAt: Date | null;
-  /** Global kill switch (SEC-08). Off until someone turns the campaign on. */
-  claimsEnabled: boolean;
-  /** Who gets the low-stock emails (RWD-04, ADM-03). Blank: ADMIN_EMAILS. */
-  alertEmails: string[];
-  /** Days after the campaign ends before players who didn't opt in are anonymized (DATA-06). */
+  /**
+   * Whether new scores count towards the leaderboard (SEC-08). Off until someone opens the
+   * contest; players can still play while it is off.
+   */
+  leaderboardOpen: boolean;
+  /** Days after the contest ends before players who didn't opt in are anonymized (DATA-06). */
   retentionDays: number;
   updatedAt: Date;
   updatedBy: string | null;
 }
 
-/** Reward catalogue (§5.1). Player-facing names and terms come from the i18n files. */
-export interface RewardDoc {
-  /** free_coke | free_garlic_sauce (game-core REWARD_IDS) */
-  _id: string;
-  names: Localized;
-  terms: Localized;
-  /** The unlock threshold for new runs (ADM-07). */
-  rule: RewardRule;
-  /** Per-reward kill switch (SEC-08). */
-  active: boolean;
-  /** Codes expire this many days after they're issued, unless the code has its own date. */
-  validityDays: number | null;
-  /** Or on this fixed date. */
-  validUntil: Date | null;
-  /** Claims per player per campaign. The unique index on claims enforces 1. */
-  maxPerPlayer: number;
-  /** Low-stock emails go out when codes left fall to these percentages of the pool (RWD-04). */
-  alertThresholds: number[];
-  /** The lowest threshold already announced, so each one sends once until stock is added. */
-  alertLevel: number | null;
-  sortOrder: number;
-  updatedAt: Date;
-}
-
-/** Single-use codes imported from uEat (RWD-01). The pool size is the budget (RWD-04). */
-export interface CodeDoc {
-  _id: ObjectId;
-  rewardId: string;
-  code: string;
-  batch: string | null;
-  expiresAt: Date | null;
-  /** available | assigned | redeemed | void */
-  status: string;
-  claimId: string | null;
-  assignedAt: Date | null;
-  redeemedAt: Date | null;
-  createdAt: Date;
-}
-
-export interface ClaimDoc {
-  _id: string;
-  playerId: string;
-  rewardId: string;
-  runId: string;
-  /** Set in the same transaction, right after the claim is created. */
-  codeId: ObjectId | null;
-  expiresAt: Date | null;
-  /** pending | sent | failed | blocked */
-  emailStatus: string;
-  src: string | null;
-  utm: Utm;
-  language: string;
-  createdAt: Date;
-}
-
 // ---------------------------------------------------------------------------------------------
-// Outboxes
+// Outbox
 // ---------------------------------------------------------------------------------------------
 
-/** Coupon emails (MAIL-02, MAIL-05, MAIL-07). One document per email, not per code. */
-export interface EmailOutboxDoc {
-  _id: string;
-  playerId: string;
-  /** coupon | resend */
-  kind: string;
-  claimIds: string[];
-  language: string;
-  /** pending | sending | retry | sent | failed | blocked */
-  status: string;
-  attempts: number;
-  nextAttemptAt: Date;
-  /** A sender holds the document until then, so the cron and after() never send it twice. */
-  leaseUntil: Date | null;
-  providerId: string | null;
-  lastError: string | null;
-  createdAt: Date;
-  sentAt: Date | null;
-}
-
-/** CRM sync queue (CRM-05). Written in the claim and consent transactions; delivered in Stage 3. */
+/** CRM sync queue (CRM-05). Written in the save and consent transactions; delivered in Stage 3. */
 export interface CrmOutboxDoc {
   _id: ObjectId;
   playerId: string;
-  /** contact_upsert | reward_claimed | consent_changed */
+  /** contact_upsert | consent_changed */
   type: string;
   payload: Record<string, unknown>;
   idempotencyKey: string;
@@ -300,7 +216,7 @@ export interface EventsDailyDoc {
   /** Montréal calendar day, YYYY-MM-DD. */
   day: string;
   name: string;
-  /** One prop that splits the event: milestone m, reward, cta target, error reason. */
+  /** One prop that splits the event: milestone points, cta target, error reason. */
   detail: string;
   src: string;
   lang: string;
@@ -350,8 +266,6 @@ export function newPlayer(v: Init<PlayerDoc, "email" | "emailNormalized" | "lang
       firstSrc: null,
       firstHost: null,
       utm: {},
-      emailBlockedAt: null,
-      emailBlockReason: null,
       crmStatus: "pending",
       crmSyncedAt: null,
       createdAt: now,
@@ -400,13 +314,13 @@ export function newRun(
     RunDoc,
     | "_id"
     | "seed"
-    | "rules"
     | "tuningVersion"
     | "issuedAt"
     | "activeMs"
     | "distanceM"
     | "garlic"
     | "hits"
+    | "points"
     | "status"
   >,
 ): RunDoc {
@@ -419,7 +333,6 @@ export function newRun(
       hostOrigin: null,
       utm: {},
       language: null,
-      rules: v.rules,
       tuningVersion: v.tuningVersion,
       issuedAt: v.issuedAt,
       finishedAt: new Date(),
@@ -427,10 +340,11 @@ export function newRun(
       distanceM: v.distanceM,
       garlic: v.garlic,
       hits: v.hits,
+      points: v.points,
       status: v.status,
       flagReason: null,
       clientVersion: null,
-      claimedAt: null,
+      savedAt: null,
     },
     v,
   );
@@ -442,94 +356,10 @@ export function newCampaignSettings(v: Partial<CampaignSettingsDoc> = {}): Campa
       _id: 1,
       startsAt: null,
       endsAt: null,
-      claimsEnabled: false,
-      alertEmails: [],
+      leaderboardOpen: false,
       retentionDays: 90,
       updatedAt: new Date(),
       updatedBy: null,
-    },
-    v,
-  );
-}
-
-export function newReward(v: Init<RewardDoc, "_id" | "names" | "terms" | "rule">): RewardDoc {
-  return fill<RewardDoc>(
-    {
-      _id: v._id,
-      names: v.names,
-      terms: v.terms,
-      rule: v.rule,
-      active: true,
-      validityDays: null,
-      validUntil: null,
-      maxPerPlayer: 1,
-      alertThresholds: [20, 5],
-      alertLevel: null,
-      sortOrder: 0,
-      updatedAt: new Date(),
-    },
-    v,
-  );
-}
-
-export function newCode(v: Init<CodeDoc, "rewardId" | "code">): CodeDoc {
-  return fill<CodeDoc>(
-    {
-      _id: new ObjectId(),
-      rewardId: v.rewardId,
-      code: v.code,
-      batch: null,
-      expiresAt: null,
-      status: "available",
-      claimId: null,
-      assignedAt: null,
-      redeemedAt: null,
-      createdAt: new Date(),
-    },
-    v,
-  );
-}
-
-export function newClaim(
-  v: Init<ClaimDoc, "playerId" | "rewardId" | "runId" | "language">,
-): ClaimDoc {
-  return fill<ClaimDoc>(
-    {
-      _id: randomUUID(),
-      playerId: v.playerId,
-      rewardId: v.rewardId,
-      runId: v.runId,
-      codeId: null,
-      expiresAt: null,
-      emailStatus: "pending",
-      src: null,
-      utm: {},
-      language: v.language,
-      createdAt: new Date(),
-    },
-    v,
-  );
-}
-
-export function newEmailOutbox(
-  v: Init<EmailOutboxDoc, "playerId" | "kind" | "claimIds" | "language">,
-): EmailOutboxDoc {
-  const now = new Date();
-  return fill<EmailOutboxDoc>(
-    {
-      _id: randomUUID(),
-      playerId: v.playerId,
-      kind: v.kind,
-      claimIds: v.claimIds,
-      language: v.language,
-      status: "pending",
-      attempts: 0,
-      nextAttemptAt: now,
-      leaseUntil: null,
-      providerId: null,
-      lastError: null,
-      createdAt: now,
-      sentAt: null,
     },
     v,
   );
@@ -597,6 +427,12 @@ export interface IndexSpec {
   options: CreateIndexesOptions & { name: string };
 }
 
+/** The leaderboard order: most points, then whoever got there first. `_id` makes it total. */
+export const BEST_RUNS_RANK_INDEX: IndexSpec = {
+  key: { points: -1, achievedAt: 1, _id: 1 },
+  options: { name: "best_runs_points_idx" },
+};
+
 export const INDEXES: Record<CollectionKey, IndexSpec[]> = {
   players: [
     {
@@ -624,51 +460,8 @@ export const INDEXES: Record<CollectionKey, IndexSpec[]> = {
       },
     },
   ],
-  bestRuns: [
-    {
-      // LB-01 order, with the player id so the order is total. `_id` is the player's id.
-      key: { garlic: -1, hits: 1, distanceM: -1, achievedAt: 1, _id: 1 },
-      options: { name: "best_runs_rank_idx" },
-    },
-  ],
+  bestRuns: [BEST_RUNS_RANK_INDEX],
   campaignSettings: [],
-  rewards: [],
-  codes: [
-    { key: { code: 1 }, options: { name: "codes_code_key", unique: true } },
-    // The claim transaction takes the oldest available code: lowest _id first (RWD-03).
-    {
-      key: { rewardId: 1, _id: 1 },
-      options: { name: "codes_available_idx", partialFilterExpression: { status: "available" } },
-    },
-    // Stock counts by reward and status read this index alone.
-    {
-      key: { rewardId: 1, status: 1, expiresAt: 1 },
-      options: { name: "codes_stock_idx" },
-    },
-  ],
-  claims: [
-    // One claim per normalized email per reward (SEC-07, RWD-05).
-    {
-      key: { playerId: 1, rewardId: 1 },
-      options: { name: "claims_player_reward_key", unique: true },
-    },
-    // A code backs at most one claim. Claims not yet holding a code have a null codeId.
-    {
-      key: { codeId: 1 },
-      options: {
-        name: "claims_code_key",
-        unique: true,
-        partialFilterExpression: { codeId: { $type: "objectId" } },
-      },
-    },
-    { key: { runId: 1 }, options: { name: "claims_run_idx" } },
-    { key: { createdAt: 1 }, options: { name: "claims_created_idx" } },
-  ],
-  emailOutbox: [
-    { key: { status: 1, nextAttemptAt: 1 }, options: { name: "email_outbox_due_idx" } },
-    { key: { providerId: 1 }, options: { name: "email_outbox_provider_idx" } },
-    { key: { playerId: 1 }, options: { name: "email_outbox_player_idx" } },
-  ],
   crmOutbox: [
     {
       key: { idempotencyKey: 1 },
@@ -692,7 +485,7 @@ export const INDEXES: Record<CollectionKey, IndexSpec[]> = {
 
 /**
  * `$jsonSchema` validators standing in for the CHECK constraints: allowed values for the
- * enumerations the app relies on, the settings singleton and the one-claim-per-reward rule.
+ * enumerations the app relies on and the settings singleton.
  */
 export const VALIDATORS: Partial<Record<CollectionKey, Document>> = {
   consents: {
@@ -717,20 +510,6 @@ export const VALIDATORS: Partial<Record<CollectionKey, Document>> = {
         _id: { enum: [1] },
         retentionDays: { bsonType: "number", minimum: 0 },
       },
-    },
-  },
-  rewards: {
-    $jsonSchema: {
-      bsonType: "object",
-      required: ["maxPerPlayer"],
-      properties: { maxPerPlayer: { enum: [1] } },
-    },
-  },
-  codes: {
-    $jsonSchema: {
-      bsonType: "object",
-      required: ["status"],
-      properties: { status: { enum: ["available", "assigned", "redeemed", "void"] } },
     },
   },
 };

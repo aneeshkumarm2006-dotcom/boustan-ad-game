@@ -6,14 +6,15 @@
 import type { Document } from "mongodb";
 import type { Db, Queryable } from "@/db/client";
 import { montrealDay, montrealDayStart, rollupEvents } from "../analytics";
+import { SAVE_WINDOW_MS } from "../runs";
+import { topBestRuns } from "./moderation";
 
 export const FUNNEL_STEPS = [
   { key: "loads", label: "Game loads" },
   { key: "starts", label: "Runs started" },
-  { key: "reached100m", label: "Reached 100 m" },
-  { key: "garlic10", label: "Got 10 garlic" },
-  { key: "claimViews", label: "Opened the claim form" },
-  { key: "claims", label: "Claimed" },
+  { key: "finishes", label: "Runs finished" },
+  { key: "saveViews", label: "Opened the save form" },
+  { key: "saves", label: "Saved a score" },
   { key: "optIns", label: "Opted in" },
 ] as const;
 
@@ -25,10 +26,9 @@ export const SPLITS: Split[] = ["day", "src", "lang", "device"];
 export const emptyFunnel = (): Funnel => ({
   loads: 0,
   starts: 0,
-  reached100m: 0,
-  garlic10: 0,
-  claimViews: 0,
-  claims: 0,
+  finishes: 0,
+  saveViews: 0,
+  saves: 0,
   optIns: 0,
 });
 
@@ -50,20 +50,9 @@ export interface FunnelRow extends Funnel {
   key: string;
 }
 
-/** `$sum` of `field` over the rollup rows for one event (and, optionally, one detail). */
-const sumOf = (field: "events" | "sessions", name: string, detail?: string): Document => ({
-  $sum: {
-    $cond: [
-      {
-        $and: [
-          { $eq: ["$name", name] },
-          ...(detail === undefined ? [] : [{ $eq: ["$detail", detail] }]),
-        ],
-      },
-      `$${field}`,
-      0,
-    ],
-  },
+/** `$sum` of `field` over the rollup rows for one event. */
+const sumOf = (field: "events" | "sessions", name: string): Document => ({
+  $sum: { $cond: [{ $eq: ["$name", name] }, `$${field}`, 0] },
 });
 
 /** Funnel rows between two Montréal days (inclusive), grouped by `split`. */
@@ -82,10 +71,9 @@ export async function funnel(
           // Loads are distinct sessions; every other step counts events.
           loads: sumOf("sessions", "load"),
           starts: sumOf("events", "start"),
-          reached100m: sumOf("events", "milestone", "100"),
-          garlic10: sumOf("events", "reward_unlocked", "free_garlic_sauce"),
-          claimViews: sumOf("events", "claim_view"),
-          claims: sumOf("events", "claim_success"),
+          finishes: sumOf("events", "game_over"),
+          saveViews: sumOf("events", "save_view"),
+          saves: sumOf("events", "save_success"),
           optIns: sumOf("events", "opt_in"),
         },
       },
@@ -97,10 +85,9 @@ export async function funnel(
     key: String(r._id ?? ""),
     loads: r.loads,
     starts: r.starts,
-    reached100m: r.reached100m,
-    garlic10: r.garlic10,
-    claimViews: r.claimViews,
-    claims: r.claims,
+    finishes: r.finishes,
+    saveViews: r.saveViews,
+    saves: r.saves,
     optIns: r.optIns,
   }));
 }
@@ -112,29 +99,37 @@ export function sumFunnel(rows: Funnel[]): Funnel {
 }
 
 export interface Health {
+  /** Players with an email, so on the leaderboard (hidden ones included). */
   players: number;
   optedIn: number;
-  claimsToday: number;
-  emailsFailed: number;
-  emailsWaiting: number;
-  flaggedRuns24h: number;
   runs24h: number;
+  flaggedRuns24h: number;
+  /** Runs credited to a player since Montréal midnight. */
+  savedToday: number;
+  /** The leader's score, or null while the board is empty. */
+  top: { points: number; nickname: string | null } | null;
 }
 
 export async function health(q: Queryable, now = new Date()): Promise<Health> {
   const day = new Date(now.getTime() - 24 * 3_600_000);
   const today = montrealDayStart(montrealDay(0, now.getTime()));
-  // One count after another keeps this usable inside a transaction too.
+  // One query after another keeps this usable inside a transaction too.
+  const [leader] = await topBestRuns(q, 1);
+  const owner = leader
+    ? await q.players.findOne({ _id: leader._id }, { projection: { nickname: 1 } })
+    : null;
   return {
     players: await q.players.countDocuments({ deletedAt: null }),
     optedIn: await q.players.countDocuments({ deletedAt: null, marketingOptIn: true }),
-    claimsToday: await q.claims.countDocuments({ createdAt: { $gte: today } }),
-    emailsFailed: await q.emailOutbox.countDocuments({ status: "failed" }),
-    emailsWaiting: await q.emailOutbox.countDocuments({
-      status: { $in: ["pending", "retry", "sending"] },
-    }),
-    flaggedRuns24h: await q.runs.countDocuments({ status: "flagged", finishedAt: { $gt: day } }),
     runs24h: await q.runs.countDocuments({ finishedAt: { $gt: day } }),
+    flaggedRuns24h: await q.runs.countDocuments({ status: "flagged", finishedAt: { $gt: day } }),
+    // A run is saved at most SAVE_WINDOW_MS after it finished, so the finish-time bound only
+    // lets the runs_finished index narrow the search.
+    savedToday: await q.runs.countDocuments({
+      finishedAt: { $gte: new Date(today.getTime() - SAVE_WINDOW_MS) },
+      savedAt: { $gte: today },
+    }),
+    top: leader ? { points: leader.points, nickname: owner?.nickname ?? null } : null,
   };
 }
 

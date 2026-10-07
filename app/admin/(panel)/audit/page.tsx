@@ -7,6 +7,23 @@ export const metadata = { title: "Audit log · Boustan game admin" };
 
 const PAGE = 50;
 
+/** What today's actions mean. Older rows (rewards, codes, claims) show their raw name only. */
+const ACTIONS: Record<string, string> = {
+  "admin.login": "Signed in",
+  "admin.logout": "Signed out",
+  "campaign.dates": "Changed the contest dates",
+  "campaign.leaderboard": "Switched the leaderboard on or off",
+  "campaign.policy": "Changed data retention",
+  "player.hide": "Hid a player from the leaderboard",
+  "player.unhide": "Put a player back on the leaderboard",
+  "player.rename": "Renamed a player",
+  "player.erase": "Erased a player",
+  "export.players": "Downloaded the players (CSV)",
+  "export.winners": "Downloaded the winners (CSV)",
+  "export.player": "Downloaded one player's data (JSON)",
+  "retention.purge": "Anonymized players (data retention)",
+};
+
 export default async function AuditPage({
   searchParams,
 }: {
@@ -48,7 +65,10 @@ export default async function AuditPage({
                   <tr key={r.id}>
                     <td>{formatMontreal(r.createdAt)}</td>
                     <td>{r.adminEmail}</td>
-                    <td className="adm-mono">{r.action}</td>
+                    <td>
+                      {ACTIONS[r.action]}
+                      <div className="adm-mono">{r.action}</div>
+                    </td>
                     <td className="adm-mono">{r.target ?? "—"}</td>
                     <td className="adm-mono" style={{ maxWidth: 420, overflowWrap: "anywhere" }}>
                       {Object.keys(r.details).length > 0 ? JSON.stringify(r.details) : "—"}

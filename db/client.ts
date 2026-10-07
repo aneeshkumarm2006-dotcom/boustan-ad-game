@@ -31,16 +31,12 @@ import {
   type AdminAuditDoc,
   type BestRunDoc,
   type CampaignSettingsDoc,
-  type ClaimDoc,
-  type CodeDoc,
   type ConsentDoc,
   type CrmOutboxDoc,
-  type EmailOutboxDoc,
   type EventDoc,
   type EventsDailyDoc,
   type PlayerDoc,
   type PlayerTokenDoc,
-  type RewardDoc,
   type RunDoc,
 } from "./schema";
 
@@ -51,10 +47,6 @@ export interface Collections {
   runs: Collection<RunDoc>;
   bestRuns: Collection<BestRunDoc>;
   campaignSettings: Collection<CampaignSettingsDoc>;
-  rewards: Collection<RewardDoc>;
-  codes: Collection<CodeDoc>;
-  claims: Collection<ClaimDoc>;
-  emailOutbox: Collection<EmailOutboxDoc>;
   crmOutbox: Collection<CrmOutboxDoc>;
   events: Collection<EventDoc>;
   eventsDaily: Collection<EventsDailyDoc>;
@@ -160,10 +152,6 @@ function collectionsOf(mongo: MongoDb, session?: ClientSession): Collections {
     runs: get<RunDoc>(COLLECTIONS.runs),
     bestRuns: get<BestRunDoc>(COLLECTIONS.bestRuns),
     campaignSettings: get<CampaignSettingsDoc>(COLLECTIONS.campaignSettings),
-    rewards: get<RewardDoc>(COLLECTIONS.rewards),
-    codes: get<CodeDoc>(COLLECTIONS.codes),
-    claims: get<ClaimDoc>(COLLECTIONS.claims),
-    emailOutbox: get<EmailOutboxDoc>(COLLECTIONS.emailOutbox),
     crmOutbox: get<CrmOutboxDoc>(COLLECTIONS.crmOutbox),
     events: get<EventDoc>(COLLECTIONS.events),
     eventsDaily: get<EventsDailyDoc>(COLLECTIONS.eventsDaily),

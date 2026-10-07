@@ -10,15 +10,15 @@ describe("shipped locale files", () => {
 });
 
 describe("checkParity", () => {
-  const base = { claim: { cta: "Claim", email: "Email" }, lb: { title: "Board" } };
+  const base = { save: { cta: "Save", email: "Email" }, lb: { title: "Board" } };
 
   it("accepts identical structures", () => {
     expect(checkParity({ en: base, fr: structuredClone(base) })).toEqual([]);
   });
 
   it("reports a key missing from one locale", () => {
-    const missing = { claim: { cta: "Réclamer" }, lb: { title: "Classement" } };
-    expect(checkParity({ en: base, fr: missing })).toEqual(['fr: missing "claim.email"']);
+    const missing = { save: { cta: "Enregistrer" }, lb: { title: "Classement" } };
+    expect(checkParity({ en: base, fr: missing })).toEqual(['fr: missing "save.email"']);
   });
 
   it("reports an extra key as missing from the other locale", () => {
@@ -27,10 +27,10 @@ describe("checkParity", () => {
   });
 
   it("reports empty and whitespace-only values", () => {
-    const blank = { claim: { cta: "", email: "  " }, lb: { title: "Classement" } };
+    const blank = { save: { cta: "", email: "  " }, lb: { title: "Classement" } };
     expect(checkParity({ en: base, fr: blank })).toEqual([
-      'fr: empty value for "claim.cta"',
-      'fr: empty value for "claim.email"',
+      'fr: empty value for "save.cta"',
+      'fr: empty value for "save.email"',
     ]);
   });
 
@@ -49,10 +49,10 @@ describe("checkParity", () => {
   });
 
   it("rejects values that are not strings, arrays or objects", () => {
-    const bad = { claim: { cta: 42 }, lb: { title: null } };
+    const bad = { save: { cta: 42 }, lb: { title: null } };
     expect(checkParity({ en: base, fr: bad })).toEqual(
       expect.arrayContaining([
-        'fr: "claim.cta" must be a string, array or object (got number)',
+        'fr: "save.cta" must be a string, array or object (got number)',
         'fr: "lb.title" must be a string, array or object (got null)',
       ]),
     );

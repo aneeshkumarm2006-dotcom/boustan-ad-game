@@ -1,7 +1,7 @@
 /**
- * Cloudflare Turnstile, verified on the server for claims and "Save my score" (SEC-05).
+ * Cloudflare Turnstile, verified on the server for "Save my score" (SEC-05).
  * With TURNSTILE_SECRET blank the check is skipped, except in production, where that is a
- * configuration error and every claim is refused.
+ * configuration error and every save is refused.
  */
 import { env } from "./env";
 import { log } from "./log";

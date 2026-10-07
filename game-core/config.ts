@@ -102,15 +102,18 @@ export const TUNING = {
     nearPx: 34,
   },
 
-  /** Default unlock rules (PRD §5.1). The campaign config can override them. */
-  rewards: {
-    free_coke: { distanceM: 100 },
-    free_garlic_sauce: { garlic: 10 },
-  },
+  /**
+   * What a run is worth: whole metres run times `pointsPerMetre`, plus `pointsPerGarlic` for each
+   * garlic. Scoring doesn't change the level a seed builds, so it needs no `version` bump.
+   */
+  scoring: { pointsPerMetre: 1, pointsPerGarlic: 10 },
 
-  /** Distance milestones (GAME-05): these, then every `milestoneEveryM` after the last. */
-  milestonesM: [25, 50, 75, 100],
-  milestoneEveryM: 100,
+  /** The players at the top of the leaderboard who win. */
+  winners: 3,
+
+  /** Point milestones (GAME-05): these, then every `milestoneEveryPts` after the last. */
+  milestonesPts: [50, 100, 150, 200],
+  milestoneEveryPts: 100,
 } as const;
 
 export type Tuning = typeof TUNING;

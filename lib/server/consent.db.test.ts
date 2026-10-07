@@ -1,10 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { newConsent } from "@/db/schema";
-import { BOTH, connect, ctx, finish, resetDb, seedCampaign } from "@/tests/db";
+import { GOOD, connect, finish, resetDb, save, seedCampaign } from "@/tests/db";
 import { erasePlayer } from "./admin/players";
-import { claimRewards } from "./claims";
-import { signToken } from "./tokens";
-import { unsubscribe } from "./unsubscribe";
+import { consentText, recordConsent } from "./consent";
 
 const { db, close } = connect();
 afterAll(close);
@@ -14,43 +12,87 @@ beforeEach(async () => {
 });
 
 async function optedInPlayer() {
-  const run = await finish(db, BOTH());
-  const res = await claimRewards(
-    db,
-    {
-      claimToken: run.claimToken!,
-      email: "news@fan.ca",
-      lang: "fr",
-      termsAge: true,
-      marketingOptIn: true,
-      src: null,
-      utm: {},
-    },
-    ctx(),
-  );
-  if (!res.ok) throw new Error(res.error);
+  const res = await save(db, await finish(db, GOOD()), "news@fan.ca", {
+    lang: "fr",
+    marketingOptIn: true,
+  });
   return res.playerId;
 }
+
+describe("recording a consent (DATA-03, L10N-07)", () => {
+  it("keeps exactly what the player saw: text, version, language, source, IP, device and host", async () => {
+    await recordConsent(db, {
+      playerId: "p1",
+      kind: "marketing",
+      lang: "fr",
+      source: "save_form",
+      ip: "203.0.113.9",
+      userAgent: "Mozilla/5.0 (test)",
+      hostOrigin: "https://news.example",
+    });
+    const { text, version } = consentText("fr", "marketing");
+    expect(await db.consents.findOne()).toMatchObject({
+      playerId: "p1",
+      kind: "marketing",
+      granted: true,
+      text,
+      textVersion: version,
+      language: "fr",
+      source: "save_form",
+      ip: "203.0.113.9",
+      userAgent: "Mozilla/5.0 (test)",
+      hostOrigin: "https://news.example",
+    });
+  });
+
+  it("only ever records a grant: the app has no way to withdraw a consent", async () => {
+    for (const kind of ["terms_age", "marketing"] as const) {
+      await recordConsent(db, {
+        playerId: "p1",
+        kind,
+        lang: "en",
+        source: "save_form",
+        ip: null,
+        userAgent: null,
+        hostOrigin: null,
+      });
+    }
+    expect((await db.consents.find().toArray()).map((c) => c.granted)).toEqual([true, true]);
+  });
+
+  it("cuts a very long user agent to 400 characters", async () => {
+    await recordConsent(db, {
+      playerId: "p1",
+      kind: "terms_age",
+      lang: "en",
+      source: "save_form",
+      ip: null,
+      userAgent: "x".repeat(500),
+      hostOrigin: null,
+    });
+    expect((await db.consents.findOne())!.userAgent).toHaveLength(400);
+  });
+});
 
 // MongoDB has no trigger to refuse an UPDATE, so the log is append-only by construction: the app
 // only ever inserts consent rows, and its database user has no `update` on the collection
 // (db/roles.ts, checked in db/roles.db.test.ts).
 describe("consent log is append-only (DATA-03)", () => {
-  it("only gains rows: a withdrawal is a new row, and earlier ones are never rewritten", async () => {
-    const playerId = await optedInPlayer();
+  it("only gains rows: a later save adds its own, and earlier ones are never rewritten", async () => {
+    await optedInPlayer();
     const before = await db.consents.find().sort({ _id: 1 }).toArray();
-    expect(before).toHaveLength(2);
-
-    await unsubscribe(db, signToken("unsubscribe", { v: 1, p: playerId }), ctx());
-    await unsubscribe(db, signToken("unsubscribe", { v: 1, p: playerId }), ctx());
-
-    const after = await db.consents.find().sort({ _id: 1 }).toArray();
-    expect(after).toHaveLength(4);
-    expect(after.slice(0, 2)).toEqual(before);
-    expect(after.slice(2).map((c) => [c.kind, c.granted])).toEqual([
-      ["marketing", false],
-      ["marketing", false],
+    expect(before.map((c) => [c.kind, c.granted])).toEqual([
+      ["terms_age", true],
+      ["marketing", true],
     ]);
+
+    // The same person saves another run from another device.
+    await save(db, await finish(db, GOOD(2)), "news@fan.ca", { lang: "fr", marketingOptIn: true });
+    const after = await db.consents.find().sort({ _id: 1 }).toArray();
+    expect(after).toHaveLength(3);
+    expect(after.slice(0, 2)).toEqual(before);
+    // The new row is the age and terms confirmation; the marketing consent was already granted.
+    expect(after[2]).toMatchObject({ kind: "terms_age", granted: true });
   });
 
   it("is emptied for a player only by erasing that player (DATA-07)", async () => {
@@ -67,42 +109,12 @@ describe("consent log is append-only (DATA-03)", () => {
       text: "…",
       textVersion: "v1",
       language: "fr",
-      source: "claim_form",
+      source: "save_form",
     };
     await db.consents.insertOne(newConsent({ ...row, kind: "marketing" }));
+    await db.consents.insertOne(newConsent({ ...row, kind: "terms_age" }));
     await expect(db.consents.insertOne(newConsent({ ...row, kind: "other" }))).rejects.toThrow(
       /validation/i,
     );
-  });
-});
-
-describe("unsubscribe link (DATA-07, AC-07)", () => {
-  it("logs a withdrawal, turns marketing off and queues it for the CRM", async () => {
-    const playerId = await optedInPlayer();
-    const token = signToken("unsubscribe", { v: 1, p: playerId });
-    expect(await unsubscribe(db, token, ctx())).toEqual({ lang: "fr" });
-
-    const player = (await db.players.findOne({ _id: playerId }))!;
-    expect(player.marketingOptIn).toBe(false);
-    const rows = await db.consents.find().sort({ _id: 1 }).toArray();
-    expect(rows.at(-1)).toMatchObject({
-      kind: "marketing",
-      granted: false,
-      source: "unsubscribe",
-      language: "fr",
-      ip: "203.0.113.7",
-      text: "Désabonnement des offres et nouvelles de Boustan par courriel.",
-    });
-    const crm = await db.crmOutbox.find({ type: "consent_changed" }).sort({ _id: 1 }).toArray();
-    expect(crm.map((c) => c.payload.marketing)).toEqual([true, false]);
-  });
-
-  it("ignores links that are forged or for another kind of token", async () => {
-    const playerId = await optedInPlayer();
-    expect(await unsubscribe(db, "nope.nope", ctx())).toBeNull();
-    const claimKind = signToken("claim", { v: 1, p: playerId });
-    expect(await unsubscribe(db, claimKind, ctx())).toBeNull();
-    const player = (await db.players.findOne())!;
-    expect(player.marketingOptIn).toBe(true);
   });
 });

@@ -1,45 +1,60 @@
 "use client";
 
-import { DEFAULT_REWARD_RULES, REWARD_IDS } from "@/game-core";
+import { POINTS_PER_GARLIC, POINTS_PER_METRE, WINNERS } from "@/game-core";
+import type { Translator } from "@/i18n";
 import type { CampaignState } from "@/lib/api";
 import { useUi } from "./context";
-import { BrandLogo, Overlay, RewardCard, Tools } from "./parts";
+import { BrandLogo, Overlay, PixelIcon, Tools } from "./parts";
 
-export function campaignMessage(
-  campaign: CampaignState | null,
-  t: ReturnType<typeof useUi>["t"],
-): string | null {
+/** Why scores don't count right now (not started, ended or switched off), or null when they do. */
+export function campaignMessage(campaign: CampaignState | null, t: Translator): string | null {
   if (!campaign) return null;
   if (campaign.status === "not_started") {
-    return t.t("start.notStarted", { date: campaign.startsAt ? t.date(campaign.startsAt) : "" });
+    return t.t("campaign.notStarted", { date: campaign.startsAt ? t.date(campaign.startsAt) : "" });
   }
-  if (campaign.status === "ended") return t.t("start.ended");
-  if (!campaign.claimsEnabled) return t.t("start.claimsOff");
+  if (campaign.status === "ended") return t.t("campaign.ended");
+  if (!campaign.leaderboardOpen) return t.t("campaign.paused");
   return null;
 }
 
-/** Start screen (§3.2): logo, title, reward cards, PLAY, how to play, toggles, links. */
+/** How a run scores, and who wins: two tiles and the winners' band. */
+function ScoringPanel() {
+  const { t } = useUi();
+  const pts = (n: number) => t.plural("common.pts", n, { n: t.num(n) });
+  return (
+    <section className="scoring" aria-label={t.t("start.scoring")} data-testid="scoring">
+      <div className="scoring-tiles">
+        <p className="scoring-tile">
+          <PixelIcon name="run1" />
+          <span>
+            <b>{pts(POINTS_PER_METRE)}</b> {t.t("start.perMetre")}
+          </span>
+        </p>
+        <p className="scoring-tile">
+          <PixelIcon name="cup" />
+          <span>
+            <b>{pts(POINTS_PER_GARLIC)}</b> {t.t("start.perGarlic")}
+          </span>
+        </p>
+      </div>
+      <p className="scoring-band">{t.t("start.winners", { n: WINNERS })}</p>
+    </section>
+  );
+}
+
+/** Start screen (§3.2): logo, title, how scoring works, PLAY, how to play, toggles, links. */
 export function StartScreen({
   campaign,
   starting,
-  hasRewards,
-  hasPending,
   onPlay,
   onLeaderboard,
-  onMyRewards,
-  onClaimPending,
 }: {
   campaign: CampaignState | null;
   starting: boolean;
-  hasRewards: boolean;
-  hasPending: boolean;
   onPlay: () => void;
   onLeaderboard: () => void;
-  onMyRewards: () => void;
-  onClaimPending: () => void;
 }) {
   const { t } = useUi();
-  const rules = campaign?.rules ?? DEFAULT_REWARD_RULES;
   const message = campaignMessage(campaign, t);
   return (
     <Overlay labelledBy="start-title" spark>
@@ -54,31 +69,7 @@ export function StartScreen({
         {t.t("brand.titleBottom")}
       </h1>
       <p className="lede">{t.t("start.lede")}</p>
-      {message ? (
-        <p className="campaign-note">{message}</p>
-      ) : (
-        <section aria-label={t.t("start.rewardsTitle")}>
-          <p className="kicker">{t.t("start.rewardsTitle")}</p>
-          <div className="rewards">
-            {REWARD_IDS.map((id) => (
-              <RewardCard
-                key={id}
-                id={id}
-                rules={rules}
-                status={campaign && !campaign.rewards[id].available ? "gone" : "open"}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-      {hasPending && (
-        <div className="btn-stack">
-          <p className="note warn">{t.t("start.pending")}</p>
-          <button type="button" className="btn" onClick={onClaimPending}>
-            {t.t("claim.cta")}
-          </button>
-        </div>
-      )}
+      {message ? <p className="campaign-note">{message}</p> : <ScoringPanel />}
       <button
         type="button"
         className="btn primary big"
@@ -90,15 +81,10 @@ export function StartScreen({
         {starting ? t.t("start.getReady") : t.t("start.play")}
       </button>
       <p className="small">{t.t("start.how")}</p>
-      <div className={hasRewards ? "btn-row" : "btn-stack"}>
+      <div className="btn-stack">
         <button type="button" className="btn ghost" onClick={onLeaderboard}>
           {t.t("common.leaderboard")}
         </button>
-        {hasRewards && (
-          <button type="button" className="btn ghost" onClick={onMyRewards}>
-            {t.t("common.myRewards")}
-          </button>
-        )}
       </div>
     </Overlay>
   );

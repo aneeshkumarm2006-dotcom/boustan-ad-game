@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Cloudflare Turnstile on the claim form (SEC-05). The script is the only third-party code the
- * game loads, and only once the claim form opens (EMB-11). Tokens are single use, so the form
+ * Cloudflare Turnstile on the save form (SEC-05). The script is the only third-party code the
+ * game loads, and only once the save form opens (EMB-11). Tokens are single use, so the form
  * resets the widget after every submit. Off in mock mode and when no site key is set.
  */
 import { useCallback, useEffect, useRef, type RefObject } from "react";
@@ -11,7 +11,7 @@ const SCRIPT = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=exp
 const SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "";
 export const TURNSTILE_ENABLED = process.env.NEXT_PUBLIC_API_MODE === "live" && SITE_KEY !== "";
 
-/** Give up waiting for a token after this long; the server then refuses the claim. */
+/** Give up waiting for a token after this long; the server then refuses the save. */
 const WAIT_MS = 10_000;
 
 interface TurnstileApi {

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { searchPlayers } from "@/lib/server/admin/players";
 import { formatMontreal } from "@/lib/server/admin/time";
 import { db } from "@/lib/server/db";
+import { n } from "../format";
 
 export const metadata = { title: "Players · Boustan game admin" };
 
@@ -19,8 +20,8 @@ export default async function PlayersPage({
         <div>
           <h1>Players</h1>
           <p>
-            Everyone who gave an email, by claiming a reward or saving a score. Open a player to see
-            their runs, codes and consents, resend a coupon, export or erase their data.
+            Everyone who saved a score. Open a player to see their runs and consents, export or
+            erase their data.
           </p>
         </div>
       </div>
@@ -57,7 +58,7 @@ export default async function PlayersPage({
                   <th>Email</th>
                   <th>Nickname</th>
                   <th>Language</th>
-                  <th className="num">Rewards</th>
+                  <th className="num">Best (points)</th>
                   <th>Offers</th>
                   <th>Joined</th>
                 </tr>
@@ -72,7 +73,7 @@ export default async function PlayersPage({
                       {p.nickname ?? "—"} {p.hidden && <span className="adm-tag warn">hidden</span>}
                     </td>
                     <td>{p.language.toUpperCase()}</td>
-                    <td className="num">{p.claimCount}</td>
+                    <td className="num">{p.bestPoints === null ? "—" : n(p.bestPoints)}</td>
                     <td>
                       {p.marketingOptIn ? (
                         <span className="adm-tag">opted in</span>
@@ -93,18 +94,21 @@ export default async function PlayersPage({
       </section>
 
       <section className="adm-card" aria-labelledby="export-title">
-        <h2 id="export-title">Export claimers</h2>
+        <h2 id="export-title">Export players</h2>
         <p className="adm-note">
-          One row per player who claimed a reward: email, language, nickname, every consent field
-          (text shown, version, date, source, IP), rewards, codes, placement and dates. Each
-          download is logged.
+          One row per player on the leaderboard, in rank order: rank, email, nickname, points,
+          distance and garlic, language, every consent field (text shown, version, date, source,
+          IP), placement and dates. Each download is logged.
         </p>
         <div className="adm-row">
-          <a className="adm-btn" href="/api/admin/export/claimers" download>
-            Download all claimers (CSV)
+          <a className="adm-btn" href="/api/admin/export/players" download>
+            Download all players (CSV)
           </a>
-          <a className="adm-btn ghost" href="/api/admin/export/claimers?optedIn=1" download>
-            Only those who opted in to offers
+          <a className="adm-btn ghost" href="/api/admin/export/players?winners=1" download>
+            Download winners (CSV)
+          </a>
+          <a className="adm-btn ghost" href="/api/admin/export/players?optedIn=1" download>
+            Only those who opted in to offers (CSV)
           </a>
         </div>
       </section>

@@ -90,8 +90,12 @@ describe("admin sign-in (ADM-01)", () => {
     expect(sessionFromLoginToken(asSession, now)).toBeNull();
     const asLogin = signToken("admin_login", { v: 1, e: "boss@boustan.test", exp: now + 1e6 });
     expect(adminFromSession(asLogin, now)).toBeNull();
-    const unsub = signToken("unsubscribe", { v: 1, p: "00000000-0000-4000-8000-000000000000" });
-    expect(adminFromSession(unsub, now)).toBeNull();
+    const save = signToken("save", {
+      v: 1,
+      run: "00000000-0000-4000-8000-000000000000",
+      exp: now + 1e6,
+    });
+    expect(adminFromSession(save, now)).toBeNull();
   });
 
   it("ends a session on expiry, and when the address leaves ADMIN_EMAILS", () => {

@@ -3,20 +3,12 @@
   "regions": ["yul1"],
   "crons": [
     {
-      "path": "/api/cron/email",
-      "schedule": "*/5 * * * *"
-    },
-    {
       "path": "/api/cron/alerts",
       "schedule": "*/15 * * * *"
     },
     {
       "path": "/api/cron/rollup",
       "schedule": "10 * * * *"
-    },
-    {
-      "path": "/api/cron/stock",
-      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/retention",

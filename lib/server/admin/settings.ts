@@ -1,57 +1,29 @@
 /**
- * Campaign settings from the admin (ADM-07, SEC-08): dates, the global claims switch, each
- * reward's active flag, threshold and code validity, retention and alert recipients. Every
- * change is audited with before and after. Thresholds reach only runs started afterwards (they
- * travel in the run token); switches act on claims at once.
+ * Contest settings from the admin (ADM-07, SEC-08): the dates, the leaderboard switch and the
+ * retention period. Every change is audited with before and after. Saving a score reads the
+ * settings fresh, so a change applies to saves at once; run finishes see it within the
+ * campaign cache's few seconds.
  */
-import type { Db } from "@/db/client";
-import { REWARD_IDS, type RewardId } from "@/game-core";
+import type { Db, Queryable } from "@/db/client";
 import { clearCampaignCache } from "../campaign";
 import { audit } from "./audit";
-import { parseEmailList } from "./pools";
 import { parseMontrealLocal, toMontrealLocal } from "./time";
-
-export interface RewardSettings {
-  active: boolean;
-  /** Metres for free_coke, garlic for free_garlic_sauce. */
-  threshold: number;
-  validityDays: number | null;
-}
 
 export interface CampaignSettingsValue {
   startsAt: Date | null;
   endsAt: Date | null;
-  claimsEnabled: boolean;
+  /** The leaderboard switch: off stops every new score at once. */
+  leaderboardOpen: boolean;
   retentionDays: number;
-  alertEmails: string[];
-  rewards: Record<RewardId, RewardSettings>;
 }
 
-export const LIMITS = {
-  free_coke: { min: 10, max: 1000, unit: "m" },
-  free_garlic_sauce: { min: 1, max: 50, unit: "garlic" },
-} as const;
-
-export async function loadSettings(q: Db): Promise<CampaignSettingsValue> {
+export async function loadSettings(q: Queryable): Promise<CampaignSettingsValue> {
   const s = await q.campaignSettings.findOne({ _id: 1 });
-  const rows = await q.rewards.find().toArray();
-  const out = {} as Record<RewardId, RewardSettings>;
-  for (const id of REWARD_IDS) {
-    const row = rows.find((r) => r._id === id);
-    const rule = (row?.rule ?? {}) as { distanceM?: number; garlic?: number };
-    out[id] = {
-      active: row?.active ?? false,
-      threshold: (id === "free_coke" ? rule.distanceM : rule.garlic) ?? 0,
-      validityDays: row?.validityDays ?? null,
-    };
-  }
   return {
     startsAt: s?.startsAt ?? null,
     endsAt: s?.endsAt ?? null,
-    claimsEnabled: s?.claimsEnabled ?? false,
+    leaderboardOpen: s?.leaderboardOpen ?? false,
     retentionDays: s?.retentionDays ?? 90,
-    alertEmails: s?.alertEmails ?? [],
-    rewards: out,
   };
 }
 
@@ -59,10 +31,8 @@ export async function loadSettings(q: Db): Promise<CampaignSettingsValue> {
 export interface SettingsForm {
   startsAt: string;
   endsAt: string;
-  claimsEnabled: boolean;
+  leaderboardOpen: boolean;
   retentionDays: string;
-  alertEmails: string;
-  rewards: Record<RewardId, { active: boolean; threshold: string; validityDays: string }>;
 }
 
 export type ValidatedSettings =
@@ -87,75 +57,49 @@ export function validateSettings(form: SettingsForm): ValidatedSettings {
     errors.push("Retention is a whole number of days, 1 to 3650.");
   }
 
-  const alertEmails = parseEmailList(form.alertEmails);
-  if (alertEmails === null) errors.push("Alert recipients must be valid email addresses.");
-
-  const out = {} as Record<RewardId, RewardSettings>;
-  for (const id of REWARD_IDS) {
-    const f = form.rewards[id];
-    const limit = LIMITS[id];
-    const threshold = wholeNumber(f.threshold);
-    if (threshold === null || threshold < limit.min || threshold > limit.max) {
-      errors.push(`${id}: the threshold is a whole number from ${limit.min} to ${limit.max}.`);
-    }
-    const validity = wholeNumber(f.validityDays);
-    if (validity === null || validity < 1 || validity > 365) {
-      errors.push(`${id}: code validity is 1 to 365 days.`);
-    }
-    out[id] = { active: f.active, threshold: threshold ?? 0, validityDays: validity };
-  }
   if (errors.length > 0) return { ok: false, errors };
   return {
     ok: true,
     value: {
       startsAt,
       endsAt,
-      claimsEnabled: form.claimsEnabled,
+      leaderboardOpen: form.leaderboardOpen,
       retentionDays: retentionDays!,
-      alertEmails: alertEmails!,
-      rewards: out,
     },
   };
 }
 
 /** Values as the form shows them. */
 export function toForm(v: CampaignSettingsValue): SettingsForm {
-  const rewardForm = (id: RewardId) => ({
-    active: v.rewards[id].active,
-    threshold: String(v.rewards[id].threshold),
-    validityDays: String(v.rewards[id].validityDays ?? ""),
-  });
   return {
     startsAt: toMontrealLocal(v.startsAt),
     endsAt: toMontrealLocal(v.endsAt),
-    claimsEnabled: v.claimsEnabled,
+    leaderboardOpen: v.leaderboardOpen,
     retentionDays: String(v.retentionDays),
-    alertEmails: v.alertEmails.join(", "),
-    rewards: {
-      free_coke: rewardForm("free_coke"),
-      free_garlic_sauce: rewardForm("free_garlic_sauce"),
-    },
   };
 }
 
-type Change = { field: string; from: unknown; to: unknown };
+type Field = keyof CampaignSettingsValue;
+type Change = { field: Field; from: unknown; to: unknown };
+
+/** The audit action for a change to each field. */
+const ACTION: Record<Field, string> = {
+  startsAt: "campaign.dates",
+  endsAt: "campaign.dates",
+  leaderboardOpen: "campaign.leaderboard",
+  retentionDays: "campaign.policy",
+};
 
 function diff(before: CampaignSettingsValue, after: CampaignSettingsValue): Change[] {
   const changes: Change[] = [];
-  const push = (field: string, from: unknown, to: unknown) => {
+  const push = (field: Field, from: unknown, to: unknown) => {
     if (JSON.stringify(from) !== JSON.stringify(to)) changes.push({ field, from, to });
   };
   // The form has minute precision; a date set from a script may carry seconds.
   push("startsAt", toMontrealLocal(before.startsAt), toMontrealLocal(after.startsAt));
   push("endsAt", toMontrealLocal(before.endsAt), toMontrealLocal(after.endsAt));
-  push("claimsEnabled", before.claimsEnabled, after.claimsEnabled);
+  push("leaderboardOpen", before.leaderboardOpen, after.leaderboardOpen);
   push("retentionDays", before.retentionDays, after.retentionDays);
-  push("alertEmails", before.alertEmails, after.alertEmails);
-  for (const id of REWARD_IDS) {
-    push(`${id}.active`, before.rewards[id].active, after.rewards[id].active);
-    push(`${id}.threshold`, before.rewards[id].threshold, after.rewards[id].threshold);
-    push(`${id}.validityDays`, before.rewards[id].validityDays, after.rewards[id].validityDays);
-  }
   return changes;
 }
 
@@ -176,45 +120,15 @@ export async function saveSettings(
         $set: {
           startsAt: value.startsAt,
           endsAt: value.endsAt,
-          claimsEnabled: value.claimsEnabled,
+          leaderboardOpen: value.leaderboardOpen,
           retentionDays: value.retentionDays,
-          alertEmails: value.alertEmails,
           updatedAt: now,
           updatedBy: admin,
         },
       },
     );
-    for (const id of REWARD_IDS) {
-      const r = value.rewards[id];
-      await tx.rewards.updateOne(
-        { _id: id },
-        {
-          $set: {
-            active: r.active,
-            rule: id === "free_coke" ? { distanceM: r.threshold } : { garlic: r.threshold },
-            validityDays: r.validityDays,
-            updatedAt: now,
-          },
-        },
-      );
-    }
     for (const c of changes) {
-      const action = c.field.endsWith(".active")
-        ? "reward.active"
-        : c.field.endsWith(".threshold")
-          ? "reward.threshold"
-          : c.field.endsWith(".validityDays")
-            ? "reward.validity"
-            : c.field === "claimsEnabled"
-              ? "campaign.claims"
-              : c.field === "retentionDays" || c.field === "alertEmails"
-                ? "campaign.policy"
-                : "campaign.dates";
-      await audit(tx, admin, action, c.field.split(".")[0], {
-        field: c.field,
-        from: c.from,
-        to: c.to,
-      });
+      await audit(tx, admin, ACTION[c.field], c.field, { field: c.field, from: c.from, to: c.to });
     }
   });
   clearCampaignCache();

@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { insertOnce } from "@/db/client";
-import { newCampaignSettings, newCode, newCrmOutbox, newPlayer, newReward } from "@/db/schema";
+import { insertOnce, isDuplicateKey } from "@/db/client";
+import { newCampaignSettings, newCrmOutbox, newPlayer } from "@/db/schema";
 import { connect, resetDb } from "@/tests/db";
 
 const { db, close } = connect(30);
@@ -125,7 +125,7 @@ describe("insertOnce", () => {
   });
 });
 
-// What the CHECK constraints guarded, now validators on the collections (db/schema.ts).
+// What the CHECK constraints guarded, now validators and unique indexes (db/schema.ts).
 describe("the schema's checks", () => {
   it("keeps the campaign settings to one document with a retention that makes sense", async () => {
     await db.campaignSettings.insertOne(newCampaignSettings());
@@ -138,25 +138,52 @@ describe("the schema's checks", () => {
     await db.campaignSettings.updateOne({ _id: 1 }, { $set: { retentionDays: 0 } });
   });
 
-  it("keeps a reward to one claim per player", async () => {
-    const reward = {
-      _id: "free_coke",
-      names: { fr: "a", en: "a" },
-      terms: { fr: "a", en: "a" },
-      rule: { distanceM: 100 },
-    };
-    await expect(db.rewards.insertOne(newReward({ ...reward, maxPerPlayer: 2 }))).rejects.toThrow(
-      /validation/i,
-    );
-    await db.rewards.insertOne(newReward(reward));
+  it("starts the contest with the leaderboard off", () => {
+    expect(newCampaignSettings()).toMatchObject({
+      _id: 1,
+      startsAt: null,
+      endsAt: null,
+      leaderboardOpen: false,
+      retentionDays: 90,
+    });
   });
 
-  it("only knows the code and run statuses it should", async () => {
-    await expect(
-      db.codes.insertOne(newCode({ rewardId: "free_coke", code: "STATUS-1", status: "lost" })),
-    ).rejects.toThrow(/validation/i);
+  it("only knows the run statuses it should", async () => {
     await expect(
       db.runs.updateOne({ _id: "none" }, { $set: { status: "maybe" } }, { upsert: true }),
     ).rejects.toThrow(/validation/i);
+  });
+
+  it("keeps one player per normalized email, one CRM row per key and one best run per player (SEC-07)", async () => {
+    const a = player("a");
+    await db.players.insertOne(a);
+    await expect(
+      db.players.insertOne({ ...player("other"), emailNormalized: a.emailNormalized }),
+    ).rejects.toThrow(/duplicate key/);
+
+    const crm = { playerId: a._id, type: "contact_upsert", payload: {}, idempotencyKey: "k" };
+    await db.crmOutbox.insertOne(newCrmOutbox(crm));
+    await expect(db.crmOutbox.insertOne(newCrmOutbox(crm))).rejects.toThrow(/duplicate key/);
+
+    const best = {
+      _id: a._id,
+      runId: "r",
+      points: 10,
+      distanceM: 10,
+      garlic: 0,
+      achievedAt: new Date(),
+    };
+    await db.bestRuns.insertOne(best);
+    await expect(db.bestRuns.insertOne({ ...best, runId: "r2" })).rejects.toThrow(/duplicate key/);
+  });
+
+  it("recognizes a duplicate key, and nothing else", async () => {
+    const a = player("a");
+    await db.players.insertOne(a);
+    const error = await db.players.insertOne({ ...a, _id: "other" }).catch((e: unknown) => e);
+    expect(isDuplicateKey(error)).toBe(true);
+    expect(isDuplicateKey(new Error("nope"))).toBe(false);
+    expect(isDuplicateKey({ code: 121 })).toBe(false);
+    expect(isDuplicateKey(null)).toBe(false);
   });
 });

@@ -30,12 +30,8 @@ export const APP_PRIVILEGES: Record<CollectionKey, string[]> = {
   consents: [...APPEND_ONLY, "remove"],
   runs: READ_WRITE,
   bestRuns: [...READ_WRITE, "remove"],
-  // The admin edits settings and rewards; the rows themselves are created by migrations and seeds.
+  // The admin edits the settings; the row itself is created by migrations and seeds.
   campaignSettings: ["find", "update"],
-  rewards: ["find", "update"],
-  codes: READ_WRITE,
-  claims: [...READ_WRITE, "remove"],
-  emailOutbox: READ_WRITE,
   crmOutbox: READ_WRITE,
   events: APPEND_ONLY,
   eventsDaily: READ_WRITE,

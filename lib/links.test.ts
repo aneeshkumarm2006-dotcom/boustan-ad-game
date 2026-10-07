@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidNickname, looksLikeEmail, maskEmail, normalizeEmail } from "./email";
+import { isValidNickname, looksLikeEmail, normalizeEmail } from "./email";
 import { outboundUrl, shareUrl, withUtm } from "./links";
 
 describe("outbound links (EMB-09)", () => {
@@ -39,11 +39,6 @@ describe("email helpers", () => {
     expect(normalizeEmail("a.lex@googlemail.com")).toBe("alex@gmail.com");
     expect(normalizeEmail("a.lex+x@videotron.ca")).toBe("a.lex@videotron.ca");
     expect(normalizeEmail("nobody")).toBe("nobody");
-  });
-
-  it("masks all but the first letter", () => {
-    expect(maskEmail("alex@gmail.com")).toBe("a•••@gmail.com");
-    expect(maskEmail("bad")).toBe("•••");
   });
 
   it("applies the nickname rules", () => {

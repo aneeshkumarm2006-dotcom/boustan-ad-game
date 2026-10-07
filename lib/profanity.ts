@@ -1,5 +1,5 @@
 /**
- * English + French profanity check for leaderboard nicknames (LB-05). Shared by the claim form
+ * English + French profanity check for leaderboard nicknames (LB-05). Shared by the save form
  * (instant feedback) and the server (which decides). Names are folded first (case, accents,
  * look-alike digits and symbols, separators, repeated letters), so "T4b@rnak" and "f.u.c.k"
  * don't slip through.

@@ -284,12 +284,6 @@
   border-left: 6px solid var(--a-tomate);
 }
 
-/* A form that follows a table in a pool card (Add codes) gets a rule above it. */
-article.adm-card > :is(.adm-table-wrap, .adm-msg) + .adm-form {
-  padding-top: 16px;
-  border-top: 1px solid var(--a-line);
-}
-
 .adm-note {
   color: var(--a-muted);
   font-size: 13px;
@@ -353,31 +347,6 @@ article.adm-card > :is(.adm-table-wrap, .adm-msg) + .adm-form {
   color: var(--a-vert);
 }
 
-.adm-stat.bad,
-.adm-stat:has(> .adm-bar.red) {
-  border-left: 6px solid var(--a-tomate);
-}
-
-/* A pool running low: the tile turns Hummus (like a warning chip) and the bar track goes Toum. */
-.adm-stat:has(> .adm-bar.amber) {
-  background: var(--a-hummus);
-  border-color: var(--a-hummus);
-}
-
-.adm-stat:has(> .adm-bar.amber) > span {
-  color: var(--a-vert);
-}
-
-.adm-stat:has(> .adm-bar.amber) .adm-bar {
-  background: var(--a-toum);
-}
-
-.adm-stat.warn .adm-tag.warn,
-.adm-stat:has(> .adm-bar.amber) .adm-tag.warn {
-  border-color: var(--a-line);
-  background: var(--a-toum);
-}
-
 /* ---------- forms and buttons ---------- */
 
 .adm-form {
@@ -421,7 +390,6 @@ article.adm-card > :is(.adm-table-wrap, .adm-msg) + .adm-form {
 .adm input[type="number"],
 .adm input[type="date"],
 .adm input[type="datetime-local"],
-.adm input[type="file"],
 .adm select,
 .adm textarea {
   min-height: 42px;
@@ -446,25 +414,6 @@ article.adm-card > :is(.adm-table-wrap, .adm-msg) + .adm-form {
 .adm textarea::placeholder {
   color: var(--a-muted);
   opacity: 1;
-}
-
-.adm input[type="file"] {
-  padding: 5px;
-}
-
-.adm input[type="file"]::file-selector-button {
-  margin-right: 12px;
-  padding: 6px 14px;
-  border: 0;
-  border-radius: 0;
-  background: var(--a-vert);
-  color: var(--a-toum);
-  font-family: var(--a-cond);
-  font-weight: 600;
-  font-size: 14px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  cursor: pointer;
 }
 
 /* A flat square box, filled Vert with a Toum tick. */
@@ -692,7 +641,7 @@ article.adm-card > :is(.adm-table-wrap, .adm-msg) + .adm-form {
   border-bottom: 0;
 }
 
-/* Forms inside a row (moderation): the same controls, one size down. */
+/* Forms inside a row (leaderboard): the same controls, one size down. */
 .adm-table .adm-row {
   align-items: center;
 }
@@ -786,12 +735,6 @@ article.adm-card > :is(.adm-table-wrap, .adm-msg) + .adm-form {
   height: 100%;
   background: var(--a-vert);
 }
-
-.adm-bar.red > i {
-  background: var(--a-tomate);
-}
-
-/* .amber keeps the Vert fill: Poivron on the light track is only 1.9:1. The tile says it instead. */
 
 /* Windows high contrast drops background colours: keep the bars readable. */
 @media (forced-colors: active) {

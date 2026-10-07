@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { advance, cheat, die, play, snapshot, stcReady, unlockBothAndDie } from "./helpers";
+import { advance, cheat, die, play, saveScore, scoreAndDie, snapshot, stcReady } from "./helpers";
 
 const HOST = "http://127.0.0.1:3200";
 const BLOCKED_HOST = "http://127.0.0.1:3201";
@@ -34,36 +34,34 @@ test("plays in a cross-origin iframe; host events fire in order with no personal
     .toContain("boustan_game_ready");
 
   await play(page, frame);
-  await unlockBothAndDie(page, frame);
-  await frame.getByRole("button", { name: "RÉCLAMER MES RÉCOMPENSES" }).click();
-  await frame.getByLabel("Votre courriel").fill("hote@example.com");
-  await frame.getByLabel(/J'ai 14 ans ou plus/).check();
-  await frame.getByRole("button", { name: "RÉCLAMER MES RÉCOMPENSES" }).click();
-  await advance(page, 500);
-  await expect(frame.getByTestId("coupon")).toHaveCount(2);
+  await scoreAndDie(page, frame);
+  await saveScore(page, frame, "hote@example.com");
+  await expect(frame.getByRole("heading", { name: "Vous êtes au classement" })).toBeVisible();
 
-  const events = (await dataLayer(page)).map((e) => e.event);
+  const pushed = await dataLayer(page);
+  const events = pushed.map((e) => e.event);
   const order = [
     "boustan_game_ready",
     "boustan_game_game_start",
     "boustan_game_milestone",
-    "boustan_game_reward_unlocked",
     "boustan_game_game_over",
-    "boustan_game_claim_view",
-    "boustan_game_claim_success",
+    "boustan_game_save_view",
+    "boustan_game_score_saved",
   ];
   const positions = order.map((name) => events.indexOf(name));
   expect(positions.every((p) => p >= 0)).toBe(true);
   expect([...positions].sort((a, b) => a - b)).toEqual(positions);
   expect(events).not.toContain("boustan_game_resize"); // resizes aren't pushed to dataLayer
 
-  const all = JSON.stringify(await dataLayer(page));
-  expect(all).not.toContain("@");
-  expect(all).not.toContain("TEST-");
-  const milestones = (await dataLayer(page)).filter((e) => e.event === "boustan_game_milestone");
-  expect(milestones.map((e) => e.boustan_game.m)).toEqual([25, 50, 75, 100]);
-  const success = (await dataLayer(page)).find((e) => e.event === "boustan_game_claim_success");
-  expect(success?.boustan_game).toEqual({ rewards: ["free_coke", "free_garlic_sauce"] });
+  expect(JSON.stringify(pushed)).not.toContain("@");
+  // Milestones are by points: 50, 100, 150, 200, then every 100.
+  const milestones = pushed.filter((e) => e.event === "boustan_game_milestone");
+  expect(milestones.slice(0, 4).map((e) => e.boustan_game.points)).toEqual([50, 100, 150, 200]);
+  const over = pushed.find((e) => e.event === "boustan_game_game_over")?.boustan_game;
+  expect(Object.keys(over ?? {}).sort()).toEqual(["distance", "garlic", "points"]);
+  expect(over?.points).toBe(Number(over?.distance) + 10 * Number(over?.garlic));
+  const saved = pushed.find((e) => e.event === "boustan_game_score_saved");
+  expect(saved?.boustan_game).toEqual({ rank: expect.any(Number) });
 });
 
 test("embed.js sizes the iframe from the game's resize events (EMB-04)", async ({ page }) => {

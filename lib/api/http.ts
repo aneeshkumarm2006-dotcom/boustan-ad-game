@@ -1,23 +1,26 @@
 /**
- * Fetch client for the real endpoints (Stage 2). No cookies (EMB-07): the player token travels
- * in the `X-Player-Token` header, and the build id in `X-Client-Version` (stored on runs).
+ * Fetch client for the real endpoints. No cookies (EMB-07): the player token travels in the
+ * `X-Player-Token` header, and the build id in `X-Client-Version` (stored on runs).
  */
 import {
   ApiError,
   type ApiErrorCode,
-  type ClaimRequest,
-  type ClaimResponse,
   type FinishRunRequest,
   type FinishRunResponse,
   type GameApi,
   type LeaderboardResponse,
+  type SaveScoreRequest,
+  type SaveScoreResponse,
   type StartRunRequest,
   type StartRunResponse,
 } from "./types";
 
 const CLIENT_VERSION = process.env.NEXT_PUBLIC_CLIENT_VERSION || "dev";
-/** Error codes the server sends that the UI tells apart; anything else is "rejected". */
-const PASSED_THROUGH = new Set<string>(["all_gone", "bad_email", "unknown_player"]);
+/**
+ * Error codes the server sends that the UI tells apart; anything else is "rejected". "closed"
+ * comes with a 409 when the contest closed before the score was saved.
+ */
+const PASSED_THROUGH = new Set<string>(["bad_email", "closed"]);
 
 async function call<T>(
   path: string,
@@ -34,8 +37,8 @@ async function call<T>(
   } catch {
     throw new ApiError("network");
   }
-  if (res.status === 202 || res.status === 204) return undefined as T;
   if (res.status === 429) throw new ApiError("rate_limited");
+  // A save token past its 30 minutes.
   if (res.status === 410) throw new ApiError("expired");
   if (res.status >= 500) throw new ApiError("network");
   if (!res.ok) {
@@ -56,18 +59,9 @@ export function createHttpApi(): GameApi {
         body: JSON.stringify(req),
         playerToken,
       }),
-    claim: (req: ClaimRequest) =>
-      call<ClaimResponse>("/api/claim", {
-        method: "POST",
-        body: JSON.stringify(req),
-        playerToken: req.playerToken,
-      }),
-    resend: (who) =>
-      call<void>("/api/claim/resend", {
-        method: "POST",
-        body: JSON.stringify("email" in who ? { email: who.email } : {}),
-        playerToken: "playerToken" in who ? who.playerToken : undefined,
-      }),
+    // A new player's save: the email identifies them, so no player token goes with it.
+    saveScore: (req: SaveScoreRequest) =>
+      call<SaveScoreResponse>("/api/score", { method: "POST", body: JSON.stringify(req) }),
     leaderboard: (limit: number, playerToken?: string) =>
       call<LeaderboardResponse>(`/api/leaderboard?limit=${limit}`, { playerToken }),
   };

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
+import { isWinningRank } from "@/game-core";
 import { LANGS, splitRich } from "@/i18n";
-import type { RewardId, RewardRules } from "@/game-core";
+import type { LeaderboardEntry } from "@/lib/api";
 import { WORDMARK } from "@/lib/brand";
 import { outboundUrl, type LinkTarget } from "@/lib/links";
 import { ART, type ArtName } from "../pixel-art";
@@ -37,16 +38,13 @@ export function PixelIcon({ name, className }: { name: ArtName; className?: stri
   );
 }
 
-/** ✓ drawn as a stroke: the brand fonts have no check mark glyph. */
-export function CheckIcon({ className }: { className?: string }) {
+/** The étincelle, the brand's four-point star: the points icon. Takes the text colour. */
+export function SparkIcon({ className }: { className?: string }) {
   return (
-    <svg className={className} viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+    <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path
-        d="M2.5 8.5 6.5 12.5 13.5 4"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.6"
-        strokeLinecap="square"
+        d="M12 0C12 10 14 12 24 12 14 12 12 14 12 24 12 14 10 12 0 12 10 12 12 10 12 0Z"
+        fill="currentColor"
       />
     </svg>
   );
@@ -179,7 +177,7 @@ export function Overlay({
   children: ReactNode;
   /** Change it to move focus again (e.g. when a screen's content swaps). */
   focusKey?: string;
-  /** Border of étincelles, for the start and coupon cards (guide: "avec parcimonie"). */
+  /** Border of étincelles, for the start and "saved" cards (guide: "avec parcimonie"). */
   spark?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -245,40 +243,57 @@ export function RichText({ text, links }: { text: string; links: Record<string, 
   );
 }
 
-export type RewardStatus = "open" | "gone" | "unlocked" | "claimed" | "offline";
+/**
+ * Whether a leaderboard row is the player's own. The rank alone isn't enough: the public top
+ * list may be up to 30 s old (LB-08), while the player's own row is always fresh.
+ */
+export function isOwnRow(row: LeaderboardEntry, me: LeaderboardEntry | undefined): boolean {
+  return me !== undefined && row.rank === me.rank && row.name === me.name;
+}
 
-export function RewardCard({
-  id,
-  rules,
-  status,
+/**
+ * Leaderboard rows (LB-04): rank, nickname, points. The winning ranks (the top 3) get a Navet
+ * étincelle and a WINNER tag, so it is said in words and not by colour alone; the player's own
+ * row is highlighted.
+ */
+export function BoardTable({
+  rows,
+  me,
+  caption,
 }: {
-  id: RewardId;
-  rules: RewardRules;
-  status: RewardStatus;
+  rows: LeaderboardEntry[];
+  me: LeaderboardEntry | undefined;
+  caption?: string;
 }) {
   const { t } = useUi();
-  const goal =
-    id === "free_coke"
-      ? t.t("reward.free_coke.goal", { m: rules.free_coke.distanceM })
-      : t.t("reward.free_garlic_sauce.goal", { n: rules.free_garlic_sauce.garlic });
-  const statusText =
-    status === "gone"
-      ? t.t("reward.allGone")
-      : status === "unlocked"
-        ? t.t("reward.unlocked")
-        : status === "claimed"
-          ? t.t("reward.claimed")
-          : status === "offline"
-            ? t.t("reward.needsConnection")
-            : null;
   return (
-    <div className="reward" data-status={status}>
-      <PixelIcon name={id === "free_coke" ? "can" : "cup"} />
-      <div>
-        <div className="reward-goal">{goal}</div>
-        <div className="reward-name">{t.t(`reward.${id}.short`)}</div>
-        {statusText && <div className="reward-status">{statusText}</div>}
-      </div>
-    </div>
+    <table className="board">
+      {caption && <caption>{caption}</caption>}
+      <thead>
+        <tr>
+          <th scope="col">{t.t("lb.rank")}</th>
+          <th scope="col">{t.t("lb.name")}</th>
+          <th scope="col">{t.t("lb.points")}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((e) => {
+          const mine = isOwnRow(e, me);
+          const winner = isWinningRank(e.rank);
+          const cls = [mine && "me", winner && "winner"].filter(Boolean).join(" ");
+          return (
+            <tr key={`${e.rank}-${e.name}`} className={cls || undefined}>
+              <td>{t.num(e.rank)}</td>
+              <td>
+                {mine ? `${t.t("lb.youRow")} · ` : ""}
+                {e.name}
+                {winner && <span className="tag">{t.t("lb.winner")}</span>}
+              </td>
+              <td>{t.num(e.points)}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }

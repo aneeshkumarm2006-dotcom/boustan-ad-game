@@ -1,16 +1,25 @@
 /**
- * Claimers export (ADM-06, CRM-02): one row per player who claimed at least one reward, with
- * every consent field, so the file can be imported into a CRM by hand. The newest consent row
- * of each kind is the current one; the full history stays in the player's record.
+ * Players export (ADM-06, CRM-02): one row per player on the leaderboard, in board order, with
+ * the score and every consent field, so Boustan can reach the winners and import the file into
+ * a CRM by hand. The newest consent row of each kind is the current one; the full history stays
+ * in the player's record.
  */
 import type { Queryable } from "@/db/client";
-import type { PlayerDoc } from "@/db/schema";
+import type { BestRunDoc } from "@/db/schema";
+import { WINNERS } from "@/game-core";
 import { toCsv } from "@/lib/csv";
+import { RANK_ORDER } from "../leaderboard";
+import { topBestRuns } from "./moderation";
 
-export const CLAIMER_COLUMNS = [
+export const PLAYER_COLUMNS = [
+  "rank",
   "email",
-  "language",
   "nickname",
+  "points",
+  "distance_m",
+  "garlic",
+  "achieved_at",
+  "language",
   "marketing_opt_in",
   "terms_age_accepted_at",
   "terms_age_text_version",
@@ -24,69 +33,66 @@ export const CLAIMER_COLUMNS = [
   "marketing_ip",
   "marketing_user_agent",
   "marketing_host_origin",
-  "rewards",
-  "codes",
   "first_src",
   "utm_source",
   "utm_medium",
   "utm_campaign",
   "utm_content",
   "first_host",
-  "first_claim_at",
   "created_at",
-  "email_blocked",
+  "hidden",
 ];
 
 const CHUNK = 5000;
 
-export async function claimersCsv(q: Queryable, optedInOnly: boolean): Promise<string> {
-  // Everyone holding a claim, then the players among them who qualify, oldest first.
-  const claimers = (
-    await q.claims.aggregate<{ _id: string }>([{ $group: { _id: "$playerId" } }]).toArray()
-  ).map((c) => c._id);
-  const people: PlayerDoc[] = [];
-  for (let i = 0; i < claimers.length; i += CHUNK) {
-    people.push(
-      ...(await q.players
-        .find({
-          _id: { $in: claimers.slice(i, i + CHUNK) },
-          deletedAt: null,
-          ...(optedInOnly ? { marketingOptIn: true } : {}),
-        })
-        .toArray()),
-    );
-  }
-  people.sort(
-    (a, b) =>
-      a.createdAt.getTime() - b.createdAt.getTime() || (a._id < b._id ? -1 : a._id > b._id ? 1 : 0),
-  );
+export interface PlayersCsvOptions {
+  /** Only the current winners: the first `WINNERS` visible rows. */
+  winnersOnly?: boolean;
+  /** Only players who opted in to offers. Ranks stay those of the whole board. */
+  optedInOnly?: boolean;
+}
+
+export async function playersCsv(
+  q: Queryable,
+  { winnersOnly = false, optedInOnly = false }: PlayersCsvOptions = {},
+): Promise<string> {
+  // Erased players have no best run, so the board is exactly the players to list.
+  const board: BestRunDoc[] = winnersOnly
+    ? await topBestRuns(q, WINNERS)
+    : await q.bestRuns.find().sort(RANK_ORDER).toArray();
 
   const rows: unknown[][] = [];
-  for (let i = 0; i < people.length; i += CHUNK) {
-    const slice = people.slice(i, i + CHUNK);
-    const ids = slice.map((p) => p._id);
-    const claimRows = await q.claims
-      .find({ playerId: { $in: ids } })
-      .sort({ createdAt: 1 })
+  // Rank counts visible players only, as on the public board; a hidden player's is blank.
+  let rank = 0;
+  for (let i = 0; i < board.length; i += CHUNK) {
+    const slice = board.slice(i, i + CHUNK);
+    const people = await q.players
+      .find({ _id: { $in: slice.map((b) => b._id) }, deletedAt: null })
       .toArray();
-    const codeDocs = await q.codes
-      .find({ _id: { $in: claimRows.flatMap((c) => (c.codeId ? [c.codeId] : [])) } })
-      .toArray();
-    const codeOf = new Map(codeDocs.map((c) => [c._id.toHexString(), c.code]));
+    const byId = new Map(people.map((p) => [p._id, p]));
     const log = await q.consents
-      .find({ playerId: { $in: ids } })
+      .find({ playerId: { $in: people.map((p) => p._id) } })
       .sort({ createdAt: 1, _id: 1 })
       .toArray();
+    const historyOf = Map.groupBy(log, (c) => c.playerId);
 
-    for (const p of slice) {
-      const mine = claimRows.filter((h) => h.playerId === p._id);
-      const history = log.filter((c) => c.playerId === p._id);
+    for (const best of slice) {
+      const p = byId.get(best._id);
+      if (!p) continue;
+      const place = p.hidden ? null : ++rank;
+      if (optedInOnly && !p.marketingOptIn) continue;
+      const history = historyOf.get(p._id) ?? [];
       const terms = history.filter((c) => c.kind === "terms_age" && c.granted).at(-1);
       const marketing = history.filter((c) => c.kind === "marketing").at(-1);
       rows.push([
+        place,
         p.email,
-        p.language,
         p.nickname,
+        best.points,
+        Math.floor(best.distanceM),
+        best.garlic,
+        best.achievedAt,
+        p.language,
         p.marketingOptIn ? "yes" : "no",
         terms?.createdAt,
         terms?.textVersion,
@@ -100,21 +106,16 @@ export async function claimersCsv(q: Queryable, optedInOnly: boolean): Promise<s
         marketing?.ip,
         marketing?.userAgent,
         marketing?.hostOrigin,
-        mine.map((h) => h.rewardId).join("; "),
-        mine
-          .map((h) => `${h.rewardId}:${(h.codeId && codeOf.get(h.codeId.toHexString())) ?? ""}`)
-          .join("; "),
         p.firstSrc,
         p.utm.utm_source,
         p.utm.utm_medium,
         p.utm.utm_campaign,
         p.utm.utm_content,
         p.firstHost,
-        mine[0]?.createdAt,
         p.createdAt,
-        p.emailBlockedAt ? (p.emailBlockReason ?? "yes") : "no",
+        p.hidden ? "yes" : "no",
       ]);
     }
   }
-  return toCsv(CLAIMER_COLUMNS, rows);
+  return toCsv(PLAYER_COLUMNS, rows);
 }

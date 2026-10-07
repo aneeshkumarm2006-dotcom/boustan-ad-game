@@ -1,10 +1,9 @@
 /**
- * Synthesized WebAudio sound effects from the reference, plus unlock and countdown sounds. No
- * audio files to download. The context is created on the first sound after a user gesture.
+ * Synthesized WebAudio sound effects from the reference, plus the countdown sounds. No audio
+ * files to download. The context is created on the first sound after a user gesture.
  */
 
-export type Sound =
-  "jump" | "jump2" | "pick" | "hit" | "caught" | "start" | "mile" | "unlock" | "tick" | "go";
+export type Sound = "jump" | "jump2" | "pick" | "hit" | "caught" | "start" | "mile" | "tick" | "go";
 
 type Ctor = typeof AudioContext;
 
@@ -74,11 +73,6 @@ export class Sfx {
         case "mile":
           this.tone(988, 988, 0.07, "triangle", 0.05);
           this.tone(1319, 1319, 0.14, "triangle", 0.05, 0.07);
-          break;
-        case "unlock":
-          [784, 988, 1175, 1568, 1319, 1568].forEach((f, i) =>
-            this.tone(f, f, i === 5 ? 0.28 : 0.09, "square", 0.045, i * 0.08),
-          );
           break;
         case "tick":
           this.tone(660, 660, 0.08, "square", 0.04);

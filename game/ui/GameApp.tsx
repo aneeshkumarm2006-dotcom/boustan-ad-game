@@ -11,44 +11,22 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import {
-  DEFAULT_REWARD_RULES,
-  REWARD_IDS,
-  TUNING,
-  levelDigest,
-  randomSeed,
-  type RewardId,
-  type RunScore,
-} from "@/game-core";
+import { TUNING, WINNERS, levelDigest, randomSeed, type RunScore } from "@/game-core";
 import { createTranslator, pickLanguage, type Lang } from "@/i18n";
 import {
   ApiError,
   createApi,
   type CampaignState,
-  type ClaimResponse,
   type GameApi,
-  type IssuedCode,
-  type LeaderboardEntry,
+  type LeaderboardResponse,
   type StartRunResponse,
 } from "@/lib/api";
 import type { HostPattern } from "@/lib/embed/allowed-hosts";
 import { createAnalytics, type Analytics } from "@/lib/analytics";
 import type { ClientEvent, EventProps } from "@/lib/analytics-events";
 import { createBridge, type Bridge, type HostCommand, type HostEvent } from "@/lib/embed/bridge";
-import { maskEmail } from "@/lib/email";
 import { shareUrl } from "@/lib/links";
-import {
-  addCodes,
-  loadBest,
-  loadCodes,
-  loadPending,
-  loadPlayer,
-  recordLocalBest,
-  savePending,
-  savePlayer,
-  type PendingClaim,
-  type SavedPlayer,
-} from "@/lib/player";
+import { loadBest, loadPlayer, recordLocalBest, savePlayer, type SavedPlayer } from "@/lib/player";
 import {
   attributionQuery,
   hostOrigin,
@@ -61,28 +39,38 @@ import { readString, writeString } from "@/lib/storage";
 // ~300 ms of first-playable time on 4G (EMB-11). It adds ~10 KB gzipped to the page.
 import { Game, type GameEvent, type GameState, type RunResult } from "../engine";
 import type { CanvasFonts } from "../fonts";
-import { LeaderboardScreen, MyRewardsScreen } from "./BoardScreens";
-import { ClaimScreen, type ClaimErrorKey, type ClaimSubmit } from "./ClaimScreen";
 import { UiContext, type Ui } from "./context";
-import { CouponScreen } from "./CouponScreen";
-import { BrandLogo, CheckIcon, Overlay, PauseIcon, PixelIcon, Tools } from "./parts";
+import { LeaderboardScreen } from "./LeaderboardScreen";
+import { BrandLogo, Overlay, PauseIcon, PixelIcon, SparkIcon, Tools } from "./parts";
 import { ResultsScreen, type FinishState } from "./ResultsScreen";
+import { SavedScreen } from "./SavedScreen";
+import { SaveScreen, type SaveErrorKey, type SaveSubmit } from "./SaveScreen";
 import { shareOrCopy } from "./share";
 import { StartScreen } from "./StartScreen";
+
+/** Where the leaderboard's BACK goes. */
+type From = "start" | "results" | "saved";
 
 type Screen =
   | { name: "start" }
   | { name: "play" }
   | { name: "results" }
-  | { name: "claim"; mode: "claim" | "save"; back: "start" | "results" }
-  | {
-      name: "coupon";
-      claim: ClaimResponse;
-      emailMasked: string | null;
-      resendTo: { email: string } | { playerToken: string };
-    }
-  | { name: "leaderboard"; back: "start" | "results" }
-  | { name: "rewards"; back: "start" | "results" };
+  | { name: "save" }
+  | { name: "saved" }
+  | { name: "leaderboard"; back: From };
+
+/** The finished run's save token, while the save form can use it (SEC-04). */
+interface SaveCtx {
+  token: string;
+  points: number;
+  expiresAt: number;
+}
+
+/** What the save form put on the board, for the "saved" screen. */
+interface SavedScore {
+  rank: number | null;
+  points: number;
+}
 
 interface Boot {
   params: LaunchParams;
@@ -96,8 +84,6 @@ interface Boot {
   muted: boolean;
   player: SavedPlayer | null;
   best: RunScore | null;
-  codes: IssuedCode[];
-  pending: PendingClaim | null;
 }
 
 /** Viewport narrower than this ratio gets the taller canvas (reference behaviour). */
@@ -105,14 +91,14 @@ const PORTRAIT_QUERY = `(max-aspect-ratio: 20/23)`;
 /** EMB-01: below this, an iframe shows "Play full screen" instead of the game. */
 const MIN_EMBED = { w: 300, h: 400 };
 const RUN_START_WAIT_MS = 1200;
-const CLAIM_WINDOW_MS = 30 * 60 * 1000;
+/** A score can be saved for this long after the run (SEC-04). */
+const SAVE_WINDOW_MS = 30 * 60 * 1000;
 /** Test hooks: set in next.config.ts, never on in production deployments. */
 const HOOKS = process.env.STC_HOOKS === "1";
 /** First-party analytics only talk to the real API (AN-01). */
 const ANALYTICS = process.env.NEXT_PUBLIC_API_MODE === "live";
 
-const backTo = (to: "start" | "results"): Screen =>
-  to === "start" ? { name: "start" } : { name: "results" };
+const backTo = (from: From): Screen => ({ name: from });
 
 let bootCache: Boot | null = null;
 
@@ -138,8 +124,6 @@ function readBoot(): Boot {
     muted: savedMuted === "1" ? true : savedMuted === "0" ? false : (params.muted ?? framed),
     player: loadPlayer(),
     best: loadBest(),
-    codes: loadCodes(),
-    pending: loadPending(),
   };
   return bootCache;
 }
@@ -175,12 +159,10 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
   const [finish, setFinish] = useState<FinishState>({ status: "pending" });
   const [best, setBest] = useStateFrom<RunScore | null>(boot?.best ?? null);
   const [newBest, setNewBest] = useState(false);
-  const [preview, setPreview] = useState<LeaderboardEntry[] | null>(null);
-  const [savedRank, setSavedRank] = useState<number | null>(null);
-  const [claimCtx, setClaimCtx] = useStateFrom<PendingClaim | null>(boot?.pending ?? null);
+  const [preview, setPreview] = useState<LeaderboardResponse | null>(null);
+  const [saveCtx, setSaveCtx] = useState<SaveCtx | null>(null);
+  const [saved, setSaved] = useState<SavedScore | null>(null);
   const [player, setPlayer] = useStateFrom<SavedPlayer | null>(boot?.player ?? null);
-  const [codes, setCodes] = useStateFrom<IssuedCode[]>(boot?.codes ?? []);
-  const [announce, setAnnounce] = useState("");
   const [toastText, setToastText] = useState<string | null>(null);
   const [tooSmall, setTooSmall] = useState(false);
   const [engineReady, setEngineReady] = useState(false);
@@ -192,11 +174,8 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const spitRef = useRef<HTMLDivElement>(null);
   const meterFillRef = useRef<HTMLElement>(null);
-  const distRef = useRef<HTMLDivElement>(null);
-  const distValueRef = useRef<HTMLSpanElement>(null);
-  const distBarRef = useRef<HTMLElement>(null);
-  const garlicRef = useRef<HTMLDivElement>(null);
-  const garlicValueRef = useRef<HTMLSpanElement>(null);
+  const pointsRef = useRef<HTMLSpanElement>(null);
+  const garlicRef = useRef<HTMLSpanElement>(null);
   const gameRef = useRef<Game | null>(null);
   const bridgeRef = useRef<Bridge | null>(null);
   const analyticsRef = useRef<Analytics | null>(null);
@@ -283,26 +262,18 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
     startingRef.current = false;
     setStarting(false);
     if (run) setCampaign(run.campaign);
-    const c = run?.campaign ?? campaign;
-    const open = c ? c.status === "active" && c.claimsEnabled : true;
-    const claimable = Object.fromEntries(
-      REWARD_IDS.map((id) => [id, c ? open && c.rewards[id].available : true]),
-    ) as Record<RewardId, boolean>;
     runRef.current = run;
     setResult(null);
     setPreview(null);
-    setSavedRank(null);
+    setSaveCtx(null);
+    setSaved(null);
     setNewBest(false);
-    game.start({
-      seed: run?.seed ?? randomSeed(),
-      rules: c?.rules ?? DEFAULT_REWARD_RULES,
-      claimable,
-    });
+    game.start({ seed: run?.seed ?? randomSeed() });
     setScreen({ name: "play" });
     emit({ type: "game_start" });
     track("start", { online: run !== null });
     frameRef.current?.focus({ preventScroll: true });
-  }, [obtainRun, campaign, emit, track]);
+  }, [obtainRun, emit, track]);
 
   const submitFinish = useCallback(
     async (run: StartRunResponse, res: RunResult) => {
@@ -321,27 +292,23 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
           loadPlayer()?.token,
         );
         setFinish({ status: "done", res: out });
-        if (out.valid && out.claimToken) {
-          const ctx: PendingClaim = {
-            runId: run.runId,
-            claimToken: out.claimToken,
-            unlocked: out.unlocked,
-            score: { distanceM: res.distanceM, garlic: res.garlic, hits: res.hits },
-            expiresAt: Date.now() + CLAIM_WINDOW_MS,
-          };
-          setClaimCtx(ctx);
-          // Keep an unclaimed reward for 30 minutes, even across reloads (§3.4).
-          if (out.unlocked.length > 0) savePending(ctx);
-          boot.api.leaderboard(3, loadPlayer()?.token).then(
-            (lb) => setPreview(lb.top),
-            () => setPreview(null),
-          );
+        if (!out.valid) return;
+        if (out.saveToken) {
+          setSaveCtx({
+            token: out.saveToken,
+            points: out.points,
+            expiresAt: Date.now() + SAVE_WINDOW_MS,
+          });
         }
+        boot.api.leaderboard(WINNERS, loadPlayer()?.token).then(
+          (lb) => setPreview(lb),
+          () => setPreview(null),
+        );
       } catch {
         setFinish({ status: "error" });
       }
     },
-    [boot, setClaimCtx],
+    [boot],
   );
 
   // ---------- engine events ----------
@@ -355,29 +322,22 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
         if (event.state === "paused") track("pause");
         break;
       case "milestone":
-        emit({ type: "milestone", data: { m: event.m } });
-        track("milestone", { m: event.m });
-        break;
-      case "unlock":
-        setAnnounce("");
-        setTimeout(() => setAnnounce(event.text), 50);
-        if (event.claimable) emit({ type: "reward_unlocked", data: { reward: event.reward } });
-        track("reward_unlocked", { reward: event.reward, claimable: event.claimable });
+        emit({ type: "milestone", data: { points: event.points } });
+        track("milestone", { points: event.points });
         break;
       case "over": {
         const res = event.result;
-        const score = { distanceM: res.distanceM, garlic: res.garlic, hits: res.hits };
+        const score = { points: res.points, distanceM: res.distanceM, garlic: res.garlic };
         setNewBest(recordLocalBest(score) && res.activeMs > 3000);
         setBest(loadBest());
         setResult(res);
         lastResultRef.current = res;
         setScreen({ name: "results" });
-        emit({
-          type: "game_over",
-          data: { distance: Math.floor(res.distanceM), garlic: res.garlic, hits: res.hits },
-        });
+        const distance = Math.floor(res.distanceM);
+        emit({ type: "game_over", data: { points: res.points, distance, garlic: res.garlic } });
         track("game_over", {
-          distance: Math.floor(res.distanceM),
+          points: res.points,
+          distance,
           garlic: res.garlic,
           hits: res.hits,
           cause: res.cause,
@@ -404,11 +364,8 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
       hud: {
         spit: spitRef.current!,
         meterFill: meterFillRef.current!,
-        distance: distRef.current!,
-        distanceValue: distValueRef.current!,
-        distanceBar: distBarRef.current!,
+        points: pointsRef.current!,
         garlic: garlicRef.current!,
-        garlicValue: garlicValueRef.current!,
       },
       fonts: { display, condensed },
       translator: createTranslator(document.documentElement.lang === "en" ? "en" : "fr"),
@@ -558,82 +515,59 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
   }, [engineReady]);
 
   // ---------- actions ----------
-  const playerToken = player?.token;
-  const submitClaim: ClaimSubmit = async (input) => {
-    if (!boot || !claimCtx) return "claim.errors.expired";
-    if (claimCtx.expiresAt < Date.now()) {
-      savePending(null);
-      return "claim.errors.expired";
-    }
-    const mode = screen.name === "claim" ? screen.mode : "claim";
-    track("claim_submit", { mode, oneTap: input.playerToken !== undefined });
-    const failed = (reason: string, key: ClaimErrorKey) => {
-      track("claim_error", { reason });
+  const submitSave: SaveSubmit = async (input) => {
+    if (!boot || !saveCtx) return "save.errors.expired";
+    const failed = (reason: string, key: SaveErrorKey) => {
+      track("save_error", { reason });
       return key;
     };
+    if (saveCtx.expiresAt < Date.now()) return failed("expired", "save.errors.expired");
+    track("save_submit");
     try {
-      const res = await boot.api.claim({
-        claimToken: claimCtx.claimToken,
+      const res = await boot.api.saveScore({
+        saveToken: saveCtx.token,
         email: input.email,
-        playerToken: input.playerToken,
         nickname: input.nickname,
         lang,
         termsAge: input.termsAge,
         marketingOptIn: input.marketingOptIn,
-        turnstileToken: input.turnstileToken ?? "",
+        turnstileToken: input.turnstileToken,
         src: boot.params.src,
         utm: boot.params.utm,
       });
-      track("claim_success", { mode, codes: res.codes.length, already: res.alreadyClaimed.length });
-      const emailMasked = input.email ? maskEmail(input.email) : (player?.emailMasked ?? null);
-      const saved = { token: res.playerToken, emailMasked: emailMasked ?? "" };
-      savePlayer(saved);
-      setPlayer(saved);
-      addCodes(res.codes);
-      setCodes(loadCodes());
-      savePending(null);
-      setClaimCtx(null);
-      const rewards = [...res.codes.map((c) => c.reward), ...res.alreadyClaimed];
-      if (rewards.length > 0) emit({ type: "claim_success", data: { rewards } });
-      if (mode === "save" || rewards.length + res.unavailable.length === 0) {
-        setSavedRank(res.rank);
-        setScreen({ name: "results" });
-      } else {
-        setScreen({
-          name: "coupon",
-          claim: res,
-          emailMasked,
-          resendTo: input.email ? { email: input.email } : { playerToken: res.playerToken },
-        });
-      }
+      track("save_success");
+      const me = { token: res.playerToken };
+      savePlayer(me);
+      setPlayer(me);
+      setSaveCtx(null);
+      // The board shows the player's best, which may be an earlier run on another device.
+      setSaved({ rank: res.rank, points: res.best?.points ?? saveCtx.points });
+      emit({ type: "score_saved", data: { rank: res.rank } });
+      setScreen({ name: "saved" });
       return null;
     } catch (error) {
       const code = error instanceof ApiError ? error.code : "network";
       switch (code) {
         case "expired":
-          savePending(null);
-          return failed(code, "claim.errors.expired");
+          return failed(code, "save.errors.expired");
         case "rejected":
-          return failed(code, "claim.errors.rejected");
+          return failed(code, "save.errors.rejected");
         case "bad_email":
-          return failed(code, "claim.errors.badEmail");
+          return failed(code, "save.errors.badEmail");
         case "rate_limited":
-          return failed(code, "claim.errors.tooMany");
-        case "unknown_player":
-          // The saved token no longer matches a player: forget it and show the form.
-          savePlayer(null);
-          setPlayer(null);
-          return failed(code, "claim.errors.notRecognized");
+          return failed(code, "save.errors.tooMany");
+        case "closed":
+          return failed(code, "save.errors.closed");
         default:
-          return failed("network", "claim.errors.network");
+          return failed("network", "save.errors.network");
       }
     }
   };
 
-  const openClaim = (mode: "claim" | "save", back: "start" | "results") => {
-    emit({ type: "claim_view" });
-    track("claim_view", { mode });
-    setScreen({ name: "claim", mode, back });
+  const openSave = () => {
+    emit({ type: "save_view" });
+    track("save_view");
+    setScreen({ name: "save" });
   };
 
   const share = async () => {
@@ -643,8 +577,10 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
       const outcome = await shareOrCopy({
         title: t.t("share.title"),
         text: t.plural("share.text", result.garlic, {
+          points: t.num(result.points),
           distance: t.num(result.distanceM),
           garlic: t.num(result.garlic),
+          n: WINNERS,
         }),
         url: shareUrl(window.location.origin),
       });
@@ -660,8 +596,8 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
   );
 
   const hudVisible = gameState === "play" || gameState === "paused" || gameState === "countdown";
-  const rules = campaign?.rules ?? DEFAULT_REWARD_RULES;
   const style = ar ? ({ "--ar": ar.toFixed(4) } as CSSProperties) : undefined;
+  const showBoard = (back: From) => setScreen({ name: "leaderboard", back });
 
   let overlay: ReactNode = null;
   if (boot && tooSmall) {
@@ -689,12 +625,8 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
           <StartScreen
             campaign={campaign}
             starting={starting || !engineReady}
-            hasRewards={codes.length > 0}
-            hasPending={claimCtx !== null && claimCtx.unlocked.length > 0}
             onPlay={() => void play()}
-            onLeaderboard={() => setScreen({ name: "leaderboard", back: "start" })}
-            onMyRewards={() => setScreen({ name: "rewards", back: "start" })}
-            onClaimPending={() => openClaim("claim", "start")}
+            onLeaderboard={() => showBoard("start")}
           />
         );
         break;
@@ -707,41 +639,31 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
             best={best}
             newBest={newBest}
             preview={preview}
-            savedRank={savedRank}
-            onClaim={(mode) => openClaim(mode, "results")}
+            onSave={openSave}
             onRetryFinish={() => runRef.current && void submitFinish(runRef.current, result)}
             onPlayAgain={() => void play()}
             onShare={() => void share()}
-            onLeaderboard={() => setScreen({ name: "leaderboard", back: "results" })}
+            onLeaderboard={() => showBoard("results")}
           />
         );
         break;
-      case "claim":
-        overlay = (
-          <ClaimScreen
-            mode={screen.mode}
-            rewards={claimCtx?.unlocked ?? []}
-            rules={rules}
-            player={player}
-            onSubmit={submitClaim}
-            onBack={() => setScreen(backTo(screen.back))}
+      case "save":
+        overlay = saveCtx && (
+          <SaveScreen
+            points={saveCtx.points}
+            onSubmit={submitSave}
+            onBack={() => setScreen({ name: "results" })}
           />
         );
         break;
-      case "coupon":
-        overlay = (
-          <CouponScreen
-            codes={screen.claim.codes}
-            alreadyClaimed={screen.claim.alreadyClaimed}
-            unavailable={screen.claim.unavailable}
-            emailMasked={screen.emailMasked}
-            onResend={() =>
-              boot.api.resend(screen.resendTo).then(
-                () => true,
-                () => false,
-              )
-            }
+      case "saved":
+        overlay = saved && (
+          <SavedScreen
+            rank={saved.rank}
+            points={saved.points}
+            campaign={campaign}
             onPlayAgain={() => void play()}
+            onLeaderboard={() => showBoard("saved")}
           />
         );
         break;
@@ -749,13 +671,11 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
         overlay = (
           <LeaderboardScreen
             api={boot.api}
-            playerToken={playerToken}
+            playerToken={player?.token}
+            campaign={campaign}
             onBack={() => setScreen(backTo(screen.back))}
           />
         );
-        break;
-      case "rewards":
-        overlay = <MyRewardsScreen codes={codes} onBack={() => setScreen(backTo(screen.back))} />;
         break;
     }
   }
@@ -790,18 +710,14 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
                 </div>
               </div>
               <div className="hud-right">
-                <div className="goal" ref={distRef} aria-hidden="true">
-                  <PixelIcon name="can" />
-                  <span className="goal-bar">
-                    <i ref={distBarRef} />
-                  </span>
-                  <CheckIcon className="check" />
-                  <span ref={distValueRef} data-testid="hud-distance" />
+                <div className="chip" aria-hidden="true">
+                  <SparkIcon className="chip-spark" />
+                  <span ref={pointsRef} data-testid="hud-points" />
+                  <span className="chip-unit">{t.t("hud.points")}</span>
                 </div>
-                <div className="goal" ref={garlicRef} aria-hidden="true">
+                <div className="chip" aria-hidden="true">
                   <PixelIcon name="cup" />
-                  <CheckIcon className="check" />
-                  <span ref={garlicValueRef} data-testid="hud-garlic" />
+                  <span ref={garlicRef} data-testid="hud-garlic" />
                 </div>
                 <button
                   type="button"
@@ -832,9 +748,6 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
         </div>
       </div>
       {overlay}
-      <div className="sr-only" aria-live="polite" data-testid="announce">
-        {announce}
-      </div>
       {toastText && (
         <div className="toast" role="status">
           {toastText}

@@ -58,12 +58,10 @@ export function montrealDayStart(day: string): Date {
 
 /** The one prop that splits each event in the rollup (`events_daily.detail`). */
 const DETAIL_PROP: Record<string, string> = {
-  milestone: "m",
-  reward_unlocked: "reward",
+  milestone: "points",
   cta_click: "target",
-  claim_error: "reason",
-  email_bounced: "kind",
-  api_claim: "outcome",
+  save_error: "reason",
+  api_save: "outcome",
 };
 
 const ROLLUP_CHUNK = 1000;

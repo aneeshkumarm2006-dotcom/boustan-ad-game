@@ -1,6 +1,6 @@
 /**
  * localStorage wrapper. The game uses no cookies (PRD EMB-07): preferences, the player token
- * and saved codes live here. Storage can be missing or throw (private mode, blocked
+ * and the local best live here. Storage can be missing or throw (private mode, blocked
  * third-party storage in an iframe), so every call degrades to "nothing saved".
  */
 

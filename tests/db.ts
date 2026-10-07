@@ -1,16 +1,24 @@
 /**
  * Helpers for the db test project: a connection to the test database, a reset between tests,
- * a seeded campaign, and runs that pass validation.
+ * an open contest, runs that pass validation, and players placed straight on the leaderboard.
  */
 import { randomUUID } from "node:crypto";
 import { inject } from "vitest";
 import { createDb, type Db } from "@/db/client";
-import { COLLECTIONS, newCampaignSettings, newCode, newReward } from "@/db/schema";
-import { TUNING, createLevel, distanceMAt, type RewardId } from "@/game-core";
+import {
+  COLLECTIONS,
+  newCampaignSettings,
+  newPlayer,
+  type BestRunDoc,
+  type PlayerDoc,
+} from "@/db/schema";
+import { TUNING, createLevel, distanceMAt, pointsOf } from "@/game-core";
+import { clearBoardCache } from "@/lib/server/leaderboard";
 import { clearCampaignCache } from "@/lib/server/campaign";
 import { setDbForTests } from "@/lib/server/db";
 import { resetMemoryLimitsForTests } from "@/lib/server/rate-limit";
 import { finishRun } from "@/lib/server/runs";
+import { saveScore, type SaveInput, type SaveSuccess } from "@/lib/server/scores";
 import { signToken } from "@/lib/server/tokens";
 
 export function connect(max = 10): { db: Db; close: () => Promise<void> } {
@@ -25,68 +33,24 @@ export async function resetDb(db: Db): Promise<void> {
     await db.mongo.collection(name).deleteMany({});
   }
   clearCampaignCache();
+  clearBoardCache();
   resetMemoryLimitsForTests();
 }
 
+/** Adds the settings document: a contest that started an hour ago and ends in 30 days. */
 export async function seedCampaign(
   db: Db,
-  { codesPerReward = 10, open = true }: { codesPerReward?: number; open?: boolean } = {},
+  { open = true, endsAt }: { open?: boolean; endsAt?: Date | null } = {},
 ): Promise<void> {
   const now = Date.now();
   await db.campaignSettings.insertOne(
     newCampaignSettings({
       startsAt: new Date(now - 3_600_000),
-      endsAt: new Date(now + 30 * 86_400_000),
-      claimsEnabled: open,
+      endsAt: endsAt === undefined ? new Date(now + 30 * 86_400_000) : endsAt,
+      leaderboardOpen: open,
     }),
   );
-  await db.rewards.insertMany([
-    newReward({
-      _id: "free_coke",
-      names: { fr: "Coke gratuit", en: "Free Coke" },
-      terms: { fr: "…", en: "…" },
-      rule: { distanceM: 100 },
-      validityDays: 30,
-      sortOrder: 0,
-    }),
-    newReward({
-      _id: "free_garlic_sauce",
-      names: { fr: "Sauce à l'ail gratuite", en: "Free garlic sauce" },
-      terms: { fr: "…", en: "…" },
-      rule: { garlic: 10 },
-      validityDays: 30,
-      sortOrder: 1,
-    }),
-  ]);
-  await addCodes(db, "free_coke", codesPerReward);
-  await addCodes(db, "free_garlic_sauce", codesPerReward);
   clearCampaignCache();
-}
-
-/** Adds `n` codes to a pool, in order: the first one added is the first one issued. */
-export async function addCodes(db: Db, reward: RewardId, n: number, prefix = "C"): Promise<void> {
-  if (n <= 0) return;
-  await db.codes.insertMany(
-    Array.from({ length: n }, (_, i) =>
-      newCode({
-        rewardId: reward,
-        code: `${prefix}-${reward === "free_coke" ? "COKE" : "GARL"}-${String(i).padStart(4, "0")}`,
-      }),
-    ),
-  );
-}
-
-/** Marks the `n` oldest available codes of a pool as issued, as a run of claims would. */
-export async function takeCodes(db: Db, reward: RewardId, n: number): Promise<void> {
-  const oldest = await db.codes
-    .find({ rewardId: reward, status: "available" }, { projection: { _id: 1 } })
-    .sort({ _id: 1 })
-    .limit(n)
-    .toArray();
-  await db.codes.updateMany(
-    { _id: { $in: oldest.map((c) => c._id) } },
-    { $set: { status: "assigned" } },
-  );
 }
 
 export interface HonestRun {
@@ -114,14 +78,18 @@ export function honestRun(seed: number, seconds: number, garlic = 0, hits = 0): 
   };
 }
 
-/** Both rewards: 100 m and 10 garlic. */
-export const BOTH = (seed = 7) => honestRun(seed, 30, 12, 1);
-/** Neither reward. */
-export const NOTHING = (seed = 9) => honestRun(seed, 8, 2, 1);
+/** What the server awards an honest run: whole metres of the curve plus 10 per garlic. */
+export const pointsFor = (run: Pick<HonestRun, "activeMs" | "garlic">): number =>
+  pointsOf({ distanceM: distanceMAt(run.activeMs), garlic: run.garlic });
+
+/** A good run: 30 s and 12 garlic, a few hundred points. */
+export const GOOD = (seed = 7) => honestRun(seed, 30, 12, 1);
+/** A short run: 8 s and 2 garlic, a few dozen points. */
+export const SHORT = (seed = 9) => honestRun(seed, 8, 2, 1);
 
 export function runTokenFor(
   run: Pick<HonestRun, "seed" | "activeMs">,
-  opts: { id?: string; issuedAt?: number; rules?: { distanceM: number; garlic: number } } = {},
+  opts: { id?: string; issuedAt?: number } = {},
 ) {
   const id = opts.id ?? randomUUID();
   const token = signToken("run", {
@@ -134,12 +102,11 @@ export function runTokenFor(
     src: "test-src",
     host: "https://host.example",
     utm: { utm_campaign: "test" },
-    rules: opts.rules ?? { distanceM: 100, garlic: 10 },
   });
   return { id, token };
 }
 
-/** Starts and finishes a run through the real service; returns its claim token. */
+/** Starts and finishes a run through the real service; returns its response and run id. */
 export async function finish(db: Db, run: HonestRun, playerToken: string | null = null) {
   const { id, token } = runTokenFor(run);
   const { response } = await finishRun(
@@ -152,3 +119,73 @@ export async function finish(db: Db, run: HonestRun, playerToken: string | null 
 }
 
 export const ctx = () => ({ ip: "203.0.113.7", userAgent: "vitest", now: new Date() });
+
+/** Saves a finished run's score for `email` through the real service; throws if it fails. */
+export async function save(
+  db: Db,
+  finished: { saveToken: string | null },
+  email: string,
+  extra: Partial<Omit<SaveInput, "saveToken" | "email">> = {},
+): Promise<SaveSuccess> {
+  const result = await saveScore(
+    db,
+    {
+      saveToken: finished.saveToken!,
+      email,
+      lang: "en",
+      termsAge: true,
+      marketingOptIn: false,
+      src: "test-src",
+      utm: {},
+      ...extra,
+    },
+    ctx(),
+  );
+  if (!result.ok) throw new Error(`save failed: ${result.error}`);
+  return result;
+}
+
+/**
+ * Puts a player on the leaderboard directly, with a best run worth `points`, without playing a
+ * run. `achievedAt` breaks ties between equal points (earlier wins).
+ */
+export async function addRanked(
+  db: Db,
+  {
+    email,
+    nickname = null,
+    points,
+    garlic = 0,
+    achievedAt = new Date(),
+    hidden = false,
+    ...overrides
+  }: {
+    email: string;
+    nickname?: string | null;
+    points: number;
+    garlic?: number;
+    achievedAt?: Date;
+    hidden?: boolean;
+  } & Partial<PlayerDoc>,
+): Promise<{ player: PlayerDoc; best: BestRunDoc }> {
+  const player = newPlayer({
+    email,
+    emailNormalized: email.toLowerCase(),
+    language: "en",
+    nickname,
+    hidden,
+    ...overrides,
+  });
+  const best: BestRunDoc = {
+    _id: player._id,
+    runId: randomUUID(),
+    points,
+    distanceM: points - garlic * 10,
+    garlic,
+    achievedAt,
+  };
+  await db.players.insertOne(player);
+  await db.bestRuns.insertOne(best);
+  clearBoardCache();
+  return { player, best };
+}

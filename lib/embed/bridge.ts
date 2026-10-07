@@ -1,11 +1,10 @@
 /**
  * postMessage bridge to the host page (PRD EMB-03, EMB-05).
  *
- * Game → host: `{ ns: "boustan-game", v: 1, type, data }`. Events never carry an email, a code
- * or anything else personal. Host → game: `{ ns: "boustan-game", v: 1, cmd, value? }`, accepted
+ * Game → host: `{ ns: "boustan-game", v: 1, type, data }`. Events never carry an email or
+ * anything else personal. Host → game: `{ ns: "boustan-game", v: 1, cmd, value? }`, accepted
  * only from the parent window and only from an origin in ALLOWED_HOSTS.
  */
-import type { RewardId } from "@/game-core";
 import { isLang, type Lang } from "@/i18n";
 import { isAllowedOrigin, type HostPattern } from "./allowed-hosts";
 
@@ -15,11 +14,12 @@ export const VERSION = 1;
 export type HostEvent =
   | { type: "ready" }
   | { type: "game_start" }
-  | { type: "milestone"; data: { m: number } }
-  | { type: "reward_unlocked"; data: { reward: RewardId } }
-  | { type: "game_over"; data: { distance: number; garlic: number; hits: number } }
-  | { type: "claim_view" }
-  | { type: "claim_success"; data: { rewards: RewardId[] } }
+  | { type: "milestone"; data: { points: number } }
+  /** `distance` in whole metres; `points` is 1 per metre plus 10 per garlic. */
+  | { type: "game_over"; data: { points: number; distance: number; garlic: number } }
+  | { type: "save_view" }
+  /** The save form put the run on the leaderboard; `rank` is null when it isn't shown. */
+  | { type: "score_saved"; data: { rank: number | null } }
   | { type: "leaderboard_view" }
   | { type: "cta_click"; data: { target: string } }
   | { type: "resize"; data: { height: number } };

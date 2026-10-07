@@ -8,8 +8,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { z } from "zod";
 import { env } from "./env";
 
-export type TokenKind =
-  "run" | "claim" | "unsubscribe" | "email_view" | "admin_login" | "admin_session";
+export type TokenKind = "run" | "save" | "email_key" | "admin_login" | "admin_session";
 
 const keys = new Map<string, Buffer>();
 function keyFor(kind: TokenKind, secret: string): Buffer {
@@ -82,24 +81,16 @@ export const runTokenSchema = z.object({
   src: z.string().max(100).nullable(),
   host: z.string().max(200).nullable(),
   utm,
-  /** Reward thresholds when the run started (ADM-07: changes apply to new runs only). */
-  rules: z.object({ distanceM: z.number(), garlic: z.number() }),
 });
 export type RunToken = z.infer<typeof runTokenSchema>;
 
-/** Issued by finish for a validated run; single use, 30 minutes (SEC-04, RWD-08). */
-export const claimTokenSchema = z.object({
+/** Issued by finish for a validated run; single use, 30 minutes (SEC-04). Saves the score. */
+export const saveTokenSchema = z.object({
   v: z.literal(1),
   run: z.uuid(),
   exp: z.number().int(),
 });
-export type ClaimToken = z.infer<typeof claimTokenSchema>;
-
-/** Unsubscribe links in emails (DATA-07). No expiry: CASL wants links that keep working. */
-export const unsubscribeTokenSchema = z.object({ v: z.literal(1), p: z.uuid() });
-
-/** The coupon email in the other language (MAIL-03). */
-export const emailViewTokenSchema = z.object({ v: z.literal(1), e: z.uuid() });
+export type SaveToken = z.infer<typeof saveTokenSchema>;
 
 /** The magic link emailed to an admin (ADM-01): valid for 15 minutes. */
 export const adminLoginTokenSchema = z.object({
@@ -128,7 +119,7 @@ export function hashToken(token: string): string {
 
 /** Stable key for rate limits on an email, without putting the address in Redis. */
 export function emailKey(normalizedEmail: string, secret = env().RUN_TOKEN_SECRET): string {
-  return createHmac("sha256", keyFor("email_view", secret))
+  return createHmac("sha256", keyFor("email_key", secret))
     .update(`rl:${normalizedEmail}`)
     .digest("hex")
     .slice(0, 32);

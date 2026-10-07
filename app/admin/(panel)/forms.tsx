@@ -72,9 +72,8 @@ export function Submit({
 
 const NAV = [
   { href: "/admin", label: "Dashboard" },
-  { href: "/admin/codes", label: "Code pools" },
+  { href: "/admin/leaderboard", label: "Leaderboard" },
   { href: "/admin/players", label: "Players" },
-  { href: "/admin/moderation", label: "Moderation" },
   { href: "/admin/campaign", label: "Campaign" },
   { href: "/admin/audit", label: "Audit log" },
 ];

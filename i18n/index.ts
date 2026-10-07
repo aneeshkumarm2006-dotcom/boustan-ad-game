@@ -12,7 +12,7 @@ export const DEFAULT_LANG: Lang = "fr";
 export type Dict = typeof en;
 const DICTS: Record<Lang, Dict> = { en, fr };
 
-/** Dot paths to every string leaf, e.g. "claim.cta" or "results.death.pita". */
+/** Dot paths to every string leaf, e.g. "save.cta" or "results.death.pita". */
 type Leaves<T, P extends string = ""> = {
   [K in keyof T & string]: T[K] extends string
     ? `${P}${K}`
@@ -75,7 +75,7 @@ export interface Translator {
   plural(key: TPluralKey, count: number, vars?: Vars): string;
   /** Whole number with the locale's grouping (FR "1 234", EN "1,234"). */
   num(n: number): string;
-  /** Short date (FR "15 oct. 2026", EN "Oct 15, 2026"). */
+  /** Short date (FR "15 oct. 2026", EN "Oct 15, 2026"), with no-break spaces: it never splits. */
   date(value: Date | string | number): string;
 }
 
@@ -119,7 +119,7 @@ export function createTranslator(lang: Lang): Translator {
         month: "short",
         year: "numeric",
       });
-      return dates.format(new Date(value));
+      return dates.format(new Date(value)).replace(/ /g, " ");
     },
   };
   translators.set(lang, translator);

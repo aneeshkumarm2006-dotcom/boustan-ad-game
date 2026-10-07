@@ -3,7 +3,7 @@
  * size, 300 × 400 (L10N-05, EMB-01).
  */
 import { expect, test, type Page } from "@playwright/test";
-import { advance, play, stcReady, unlockBothAndDie } from "./helpers";
+import { advance, cheat, die, play, simulate, stcReady } from "./helpers";
 
 test.use({ viewport: { width: 300, height: 400 } });
 
@@ -46,16 +46,32 @@ for (const lang of ["fr", "en"]) {
     await play(page);
     await advance(page, 1000);
     await noHorizontalOverflow(page, "hud");
-    await unlockBothAndDie(page);
+    // A long run, so the HUD holds a four-digit score (grouped in French: "1 150").
+    await cheat(page, { invincible: true, magnet: true });
+    await simulate(page, page, 90);
+    await noHorizontalOverflow(page, "hud, long run");
+    await die(page);
     await noHorizontalOverflow(page, "results");
 
-    await page.locator(".card .btn.primary").first().click(); // claim
-    await noHorizontalOverflow(page, "claim");
+    await page.getByTestId("save").click();
+    await noHorizontalOverflow(page, "save");
     await page.locator('.card input[type="email"]').fill("long.name.for.layout@example.com");
     await page.locator('.card input[type="checkbox"]').first().check();
     await page.locator('.card button[type="submit"]').click();
     await advance(page, 500);
-    await expect(page.getByTestId("coupon")).toHaveCount(2);
-    await noHorizontalOverflow(page, "coupon");
+    await expect(page.getByTestId("saved")).toBeVisible();
+    await noHorizontalOverflow(page, "saved");
+
+    await page.getByRole("button", { name: lang === "fr" ? "CLASSEMENT" : "LEADERBOARD" }).click();
+    await advance(page, 300);
+    await expect(page.locator(".board tr.me")).toHaveCount(1);
+    await noHorizontalOverflow(page, "leaderboard, own row");
+  });
+
+  test(`the closed-contest note fits 300 × 400 in ${lang}`, async ({ page }) => {
+    await page.goto(`/?lang=${lang}&mock=not_started`);
+    await stcReady(page);
+    await expect(page.locator(".campaign-note")).toBeVisible();
+    await noHorizontalOverflow(page, "start, not started");
   });
 }

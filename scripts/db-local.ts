@@ -45,7 +45,7 @@ async function main() {
     instanceOpts: [{ port: PORT, dbPath: DIR, storageEngine: "wiredTiger" }],
   });
   console.log(`MongoDB ready: ${URL}`);
-  console.log("Next: npm run db:migrate && npm run db:seed -- --open --test-codes 200");
+  console.log("Next: npm run db:migrate && npm run db:seed -- --open --demo 30");
   const stop = async () => {
     await rs.stop({ doCleanup: false });
     process.exit(0);

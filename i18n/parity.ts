@@ -1,7 +1,7 @@
 /**
  * Checks that every locale file has the same keys (PRD L10N-01, AC-09).
  *
- * Nested objects and arrays are flattened to dot paths ("claim.cta", "death.0"), so a missing
+ * Nested objects and arrays are flattened to dot paths ("save.cta", "death.0"), so a missing
  * array entry counts as a missing key. Returns one human-readable line per problem; an empty
  * list means the locales are in sync.
  */

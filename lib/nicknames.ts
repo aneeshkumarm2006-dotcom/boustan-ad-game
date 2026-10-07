@@ -36,7 +36,7 @@ export const MOODS = [
   "Fusée",
 ];
 
-/** Longest nickname the claim form accepts (LB-05); auto names stay inside it so a reroll is always valid. */
+/** Longest nickname the save form accepts (LB-05); auto names stay inside it so a reroll is always valid. */
 export const NICKNAME_MAX = 16;
 
 export function autoNickname(random: () => number = Math.random): string {

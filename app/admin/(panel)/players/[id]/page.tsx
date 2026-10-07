@@ -5,24 +5,10 @@ import { playerDetail } from "@/lib/server/admin/players";
 import { formatMontreal } from "@/lib/server/admin/time";
 import { db } from "@/lib/server/db";
 import { ActionForm, Submit } from "../../forms";
-import {
-  erasePlayerAction,
-  renameAction,
-  resendCouponAction,
-  setHiddenAction,
-} from "../../actions";
+import { erasePlayerAction, renameAction, setHiddenAction } from "../../actions";
 import { n } from "../../format";
 
 export const metadata = { title: "Player · Boustan game admin" };
-
-const STATUS_TAG: Record<string, string> = {
-  sent: "",
-  pending: "warn",
-  sending: "warn",
-  retry: "warn",
-  failed: "bad",
-  blocked: "bad",
-};
 
 export default async function PlayerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -50,9 +36,6 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
             <span className="adm-tag">opted in to offers</span>
           ) : (
             <span className="adm-tag mute">no marketing consent</span>
-          )}
-          {player.emailBlockedAt && (
-            <span className="adm-tag bad">email blocked: {player.emailBlockReason}</span>
           )}
         </div>
       </div>
@@ -82,7 +65,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
             <dt>Best run</dt>
             <dd>
               {best
-                ? `${n(best.garlic)} garlic · ${n(best.hits)} hits · ${n(Math.floor(best.distanceM))} m`
+                ? `${n(best.points)} points · ${n(Math.floor(best.distanceM))} m · ${n(best.garlic)} garlic`
                 : "—"}
             </dd>
           </dl>
@@ -90,15 +73,6 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
 
         <section className="adm-card" aria-labelledby="actions-title">
           <h2 id="actions-title">Actions</h2>
-          <ActionForm action={resendCouponAction}>
-            <input type="hidden" name="id" value={player._id} />
-            <div className="adm-row">
-              <Submit pending="Queuing…">Resend coupon email</Submit>
-              <span className="adm-note">
-                Sends all the codes this player holds to their address.
-              </span>
-            </div>
-          </ActionForm>
           <ActionForm action={renameAction}>
             <input type="hidden" name="id" value={player._id} />
             <div className="adm-row">
@@ -136,46 +110,6 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
         </section>
       </div>
 
-      <section className="adm-card" aria-labelledby="claims-title">
-        <h2 id="claims-title">Rewards and codes</h2>
-        {detail.claims.length === 0 ? (
-          <p className="adm-note">No rewards claimed.</p>
-        ) : (
-          <div className="adm-table-wrap">
-            <table className="adm-table">
-              <thead>
-                <tr>
-                  <th>Claimed</th>
-                  <th>Reward</th>
-                  <th>Code</th>
-                  <th>Code status</th>
-                  <th>Expires</th>
-                  <th>Email</th>
-                  <th>From</th>
-                </tr>
-              </thead>
-              <tbody>
-                {detail.claims.map((c) => (
-                  <tr key={c.id}>
-                    <td>{formatMontreal(c.createdAt)}</td>
-                    <td>{c.reward}</td>
-                    <td className="adm-mono">{c.code ?? "—"}</td>
-                    <td>{c.codeStatus ?? "—"}</td>
-                    <td>{formatMontreal(c.expiresAt)}</td>
-                    <td>
-                      <span className={`adm-tag ${STATUS_TAG[c.emailStatus] ?? "mute"}`}>
-                        {c.emailStatus}
-                      </span>
-                    </td>
-                    <td>{c.src ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
       <section className="adm-card" aria-labelledby="runs-title">
         <header>
           <h2 id="runs-title">Runs</h2>
@@ -190,6 +124,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
                 <tr>
                   <th>When</th>
                   <th>Status</th>
+                  <th className="num">Points</th>
                   <th className="num">Distance</th>
                   <th className="num">Garlic</th>
                   <th className="num">Hits</th>
@@ -208,6 +143,7 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
                         <span className="adm-tag bad">flagged: {r.flagReason}</span>
                       )}
                     </td>
+                    <td className="num">{n(r.points)}</td>
                     <td className="num">{n(Math.floor(r.distanceM))} m</td>
                     <td className="num">{n(r.garlic)}</td>
                     <td className="num">{n(r.hits)}</td>
@@ -266,51 +202,12 @@ export default async function PlayerPage({ params }: { params: Promise<{ id: str
         )}
       </section>
 
-      <section className="adm-card" aria-labelledby="emails-title">
-        <h2 id="emails-title">Emails</h2>
-        {detail.emails.length === 0 ? (
-          <p className="adm-note">No emails queued.</p>
-        ) : (
-          <div className="adm-table-wrap">
-            <table className="adm-table">
-              <thead>
-                <tr>
-                  <th>Queued</th>
-                  <th>Kind</th>
-                  <th>Status</th>
-                  <th className="num">Attempts</th>
-                  <th>Sent</th>
-                  <th>Last error</th>
-                </tr>
-              </thead>
-              <tbody>
-                {detail.emails.map((e) => (
-                  <tr key={e.id}>
-                    <td>{formatMontreal(e.createdAt)}</td>
-                    <td>{e.kind}</td>
-                    <td>
-                      <span className={`adm-tag ${STATUS_TAG[e.status] ?? "mute"}`}>
-                        {e.status}
-                      </span>
-                    </td>
-                    <td className="num">{e.attempts}</td>
-                    <td>{formatMontreal(e.sentAt)}</td>
-                    <td>{e.lastError ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
       <section className="adm-card adm-card-danger" aria-labelledby="erase-title">
         <h2 id="erase-title">Erase this player</h2>
         <p className="adm-note">
           Removes the email, nickname, consent log (including IP addresses), device tokens and the
-          leaderboard row. Runs, claims and codes stay as anonymous totals, and codes already issued
-          still count against the pool. This can&rsquo;t be undone. If this player is hidden,
-          erasing lifts the block: they could return as a new player.
+          leaderboard row. Runs stay as anonymous totals. This can&rsquo;t be undone. If this player
+          is hidden, erasing lifts the block: they could return as a new player.
         </p>
         <ActionForm action={erasePlayerAction}>
           <input type="hidden" name="id" value={player._id} />

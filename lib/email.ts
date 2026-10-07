@@ -12,7 +12,7 @@ export function looksLikeEmail(value: string): boolean {
 }
 
 /**
- * One claim per person per reward (RWD-05): trim, lowercase, drop a "+tag" from the local part,
+ * One player per person (SEC-07): trim, lowercase, drop a "+tag" from the local part,
  * and for gmail.com / googlemail.com drop dots too. The address as typed is kept for sending.
  */
 export function normalizeEmail(email: string): string {
@@ -28,14 +28,6 @@ export function normalizeEmail(email: string): string {
     domain = "gmail.com";
   }
   return `${local}@${domain}`;
-}
-
-/** "alex@gmail.com" → "a•••@gmail.com", for "Also sent to" and one-tap claims (§3.2, §3.3). */
-export function maskEmail(email: string): string {
-  const v = email.trim();
-  const at = v.lastIndexOf("@");
-  if (at < 1) return "•••";
-  return `${v[0]}•••${v.slice(at)}`;
 }
 
 /** Leaderboard nickname rules (LB-05): 2–16 letters (accents allowed), digits, spaces, -_.' */

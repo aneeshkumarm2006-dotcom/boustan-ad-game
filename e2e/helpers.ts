@@ -16,10 +16,19 @@ export interface Stc {
     garlic: number;
     hits: number;
     heat: number;
-    unlocked: string[];
+    points: number;
   };
   cheat(c: { invincible?: boolean; magnet?: boolean }): void;
   levelDigest(seed: number, m: number): string;
+  /** The last finished run, as sent to the API. */
+  result(): {
+    seed: number;
+    distanceM: number;
+    garlic: number;
+    hits: number;
+    activeMs: number;
+    points: number;
+  };
 }
 
 type Target = Page | Frame;
@@ -30,6 +39,10 @@ export async function stcReady(target: Target): Promise<void> {
 
 export function snapshot(target: Target) {
   return target.evaluate(() => (window as unknown as { __stc: Stc }).__stc.snapshot());
+}
+
+export function lastResult(target: Target) {
+  return target.evaluate(() => (window as unknown as { __stc: Stc }).__stc.result());
 }
 
 export function cheat(target: Target, c: { invincible?: boolean; magnet?: boolean }) {
@@ -71,12 +84,13 @@ export async function simulate(page: Page, target: Target, seconds: number): Pro
   await advance(page, 100);
 }
 
-/** Plays with cheats until both rewards unlock, then lets the spit win. */
-export async function unlockBothAndDie(page: Page, target: Target = page): Promise<void> {
+/**
+ * Plays `seconds` with cheats (no hits, every garlic pulled in), then lets the spit win. 30 s
+ * is worth over 250 points: 163 m plus the garlic.
+ */
+export async function scoreAndDie(page: Page, target: Target = page, seconds = 30): Promise<void> {
   await cheat(target, { invincible: true, magnet: true });
-  await simulate(page, target, 30);
-  const snap = await snapshot(target);
-  expect(snap.unlocked.sort()).toEqual(["free_coke", "free_garlic_sauce"]);
+  await simulate(page, target, seconds);
   await die(page, target);
 }
 
@@ -85,6 +99,15 @@ export async function die(page: Page, target: Target = page): Promise<void> {
   await setHeat(target, 3);
   await simulate(page, target, 2.5);
   await expect.poll(async () => (await snapshot(target)).state).toBe("over");
+  await advance(page, 500);
+}
+
+/** From the results screen: opens the save form, fills in the email and the 14+ box, saves. */
+export async function saveScore(page: Page, target: Target, email: string): Promise<void> {
+  await target.getByTestId("save").click();
+  await target.locator('.card input[type="email"]').fill(email);
+  await target.locator('.card input[type="checkbox"]').first().check();
+  await target.locator('.card button[type="submit"]').click();
   await advance(page, 500);
 }
 

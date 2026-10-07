@@ -1,7 +1,7 @@
 /**
  * Page context read once at load: query parameters (PRD EMB-02), whether the game is framed,
  * and the host's origin. Unknown parameters are ignored; known ones are kept for attribution
- * and sent with each run and claim (AN-04).
+ * and sent with each run and saved score (AN-04).
  */
 
 export const UTM_KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_content"] as const;

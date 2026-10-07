@@ -1,23 +1,24 @@
 /**
  * Run start and finish (SEC-01 to SEC-04). Starting a run writes nothing: the token carries
  * everything finish needs. Finish writes the run row once, keyed by the run id, so a token
- * can't be spent twice; then it validates the numbers against the seed (game-core).
+ * can't be spent twice; then it validates the numbers against the seed (game-core) and scores
+ * the run on the server: 1 point per metre of the speed curve at `activeMs`, plus 10 per garlic.
  */
 import { randomInt, randomUUID } from "node:crypto";
 import { insertOnce, isDuplicateKey, type Db } from "@/db/client";
 import { newRun } from "@/db/schema";
-import { TUNING, unlockedRewards, validateRun, type RunFlag } from "@/game-core";
+import { TUNING, distanceMAt, scoreOf, validateRun, type RunFlag } from "@/game-core";
 import type { Lang } from "@/i18n";
 import type { FinishRunResponse, StartRunResponse } from "@/lib/api/types";
 import type { Utm } from "@/lib/session";
-import { cachedCampaign, campaignState, rewardClaimable, rewardRules, runRules } from "./campaign";
+import { boardOpen, cachedCampaign, campaignState } from "./campaign";
 import { bestOf, rankOfPlayer, rankPreview, updateBestRun } from "./leaderboard";
 import { log } from "./log";
 import { findPlayerByToken, touchPlayerToken } from "./players";
-import { claimTokenSchema, runTokenSchema, signToken, verifyToken } from "./tokens";
+import { saveTokenSchema, runTokenSchema, signToken, verifyToken } from "./tokens";
 
-/** Rewards unlocked in a run can be claimed for this long (SEC-04, RWD-08). */
-export const CLAIM_WINDOW_MS = 30 * 60 * 1000;
+/** A score can be saved for this long after the run (SEC-04). */
+export const SAVE_WINDOW_MS = 30 * 60 * 1000;
 
 export interface StartInput {
   src: string | null;
@@ -40,7 +41,6 @@ export async function startRun(input: StartInput, now = new Date()): Promise<Sta
     src: input.src,
     host: input.host,
     utm: input.utm,
-    rules: runRules(campaign),
   });
   return { runId, seed, token, campaign: campaignState(campaign, now) };
 }
@@ -62,8 +62,8 @@ export interface FinishContext {
 /** Same answer for every failure, so a forger learns nothing (SEC-03). */
 const INVALID: FinishRunResponse = {
   valid: false,
-  unlocked: [],
-  claimToken: null,
+  points: 0,
+  saveToken: null,
   best: null,
   rankPreview: null,
   rank: null,
@@ -82,13 +82,20 @@ export async function finishRun(
   if (!token) return reject(runId, "bad_token");
   if (token.id !== runId) return reject(runId, "run_mismatch");
 
-  const score = { distanceM: input.distance, garlic: input.garlic, hits: input.hits };
   const verdict = validateRun(
     { seed: token.seed, issuedAt: token.iat, tuningVersion: token.tv },
     input,
     now.getTime(),
   );
+  // A valid run is scored from the curve at its play time, not from the reported distance. A
+  // flagged run keeps what it claimed, for the admin to look at, and earns nothing.
+  const score = scoreOf({
+    distanceM: verdict.ok ? distanceMAt(input.activeMs) : input.distance,
+    garlic: input.garlic,
+  });
   const player = await findPlayerByToken(q, ctx.playerToken);
+  const campaign = await cachedCampaign();
+  const open = boardOpen(campaign, now);
 
   // The run id is the document's _id, so a token can only be spent once. Two finishes at the
   // same moment may also surface as a duplicate key, which means the same thing.
@@ -105,18 +112,21 @@ export async function finishRun(
         hostOrigin: token.host,
         utm: token.utm,
         language: token.lang,
-        rules: token.rules,
         tuningVersion: token.tv,
         issuedAt: new Date(token.iat),
         finishedAt: now,
         // Clamp what we store; a forged run can send anything that passed the schema.
         activeMs: Math.min(input.activeMs, 2_147_483_647),
-        distanceM: input.distance,
+        distanceM: score.distanceM,
         garlic: input.garlic,
         hits: input.hits,
+        points: verdict.ok ? score.points : 0,
         status: verdict.ok ? "valid" : "flagged",
         flagReason: verdict.ok ? null : verdict.reason,
         clientVersion: ctx.clientVersion,
+        // A known device is saved as it finishes, which also spends the run for anyone else, so
+        // one run can't be credited to two players.
+        savedAt: verdict.ok && player && open ? now : null,
       }),
     );
   } catch (error) {
@@ -126,35 +136,34 @@ export async function finishRun(
   if (!inserted) return reject(runId, "reused");
   if (!verdict.ok) return reject(runId, verdict.reason);
 
-  const campaign = await cachedCampaign();
-  const unlocked = unlockedRewards(score, rewardRules(token.rules)).filter((id) =>
-    rewardClaimable(campaign, id, now),
-  );
-
   let best = null;
   let rank: number | null = null;
   if (player) {
-    await updateBestRun(q, player._id, { ...score, runId, at: now });
+    if (open) await updateBestRun(q, player._id, { ...score, runId, at: now });
     best = await bestOf(q, player._id);
     rank = await rankOfPlayer(q, player._id);
     void touchPlayerToken(q, ctx.playerToken!).catch(() => {});
   }
-  const preview = await rankPreview(q, score, player?._id ?? null);
-  const claimToken = signToken("claim", {
-    v: 1,
-    run: runId,
-    exp: now.getTime() + CLAIM_WINDOW_MS,
-  } satisfies typeof claimTokenSchema._output);
+  const preview = open ? await rankPreview(q, score, player?._id ?? null) : null;
+  // A known player's run is already saved, so only a new player needs the token.
+  const saveToken =
+    open && !player
+      ? signToken("save", {
+          v: 1,
+          run: runId,
+          exp: now.getTime() + SAVE_WINDOW_MS,
+        } satisfies typeof saveTokenSchema._output)
+      : null;
 
   log.info("run_finished", {
     runId,
+    points: score.points,
     distance: Math.round(score.distanceM),
-    garlic: score.garlic,
-    hits: score.hits,
-    unlocked: unlocked.join(","),
+    garlic: input.garlic,
+    hits: input.hits,
   });
   return {
-    response: { valid: true, unlocked, claimToken, best, rankPreview: preview, rank },
+    response: { valid: true, points: score.points, saveToken, best, rankPreview: preview, rank },
     flag: null,
   };
 }

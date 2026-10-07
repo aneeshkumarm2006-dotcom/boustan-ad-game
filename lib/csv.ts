@@ -1,6 +1,7 @@
 /**
- * Small CSV reader and writer (RFC 4180): quoted fields, doubled quotes, newlines inside
- * quotes, CRLF or LF. Used for code-pool imports and the claimers export (RWD-02, ADM-06).
+ * Small CSV writer for the admin players export (ADM-06), and a reader (RFC 4180: quoted fields,
+ * doubled quotes, newlines inside quotes, CRLF or LF) that the tests use to check the export
+ * round-trips.
  */
 
 /** Rows of fields. A leading byte-order mark is dropped; wholly blank lines are skipped. */

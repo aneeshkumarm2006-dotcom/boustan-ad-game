@@ -13,15 +13,16 @@
     "close": "Fermer",
     "playAgain": "REJOUER",
     "leaderboard": "CLASSEMENT",
-    "myRewards": "MES RÉCOMPENSES",
-    "copy": "COPIER",
-    "copied": "COPIÉ!",
     "copyFailed": "COPIE IMPOSSIBLE, DÉSOLÉ",
     "loading": "Chargement…",
     "retry": "RÉESSAYER",
     "orderOnline": "COMMANDER EN LIGNE",
     "findBoustan": "TROUVER MON BOUSTAN",
-    "newTab": "(s'ouvre dans un nouvel onglet)"
+    "newTab": "(s'ouvre dans un nouvel onglet)",
+    "pts": {
+      "one": "{n} PT",
+      "other": "{n} PTS"
+    }
   },
   "settings": {
     "language": "Langue",
@@ -31,43 +32,30 @@
   },
   "start": {
     "kicker": "URGENT",
-    "lede": "Il court pour sa vie. La broche est juste derrière lui.",
+    "lede": "Pas de ligne d'arrivée. Chaque mètre vaut un point, chaque sauce à l'ail en vaut dix.",
     "play": "COURS, POULET, COURS",
     "getReady": "PRÉPAREZ-VOUS…",
     "how": "Touchez l'écran ou appuyez sur Espace pour sauter. Touchez de nouveau en l'air pour un double saut. Attrapez de l'ail pour repousser la broche.",
-    "rewardsTitle": "GAGNEZ EN UNE COURSE",
-    "notStarted": "Les récompenses commencent le {date}. Échauffez-vous!",
-    "ended": "Cette promotion est terminée. Jouez pour le plaisir!",
-    "claimsOff": "Les récompenses sont en pause pour l'instant. Jouez pour le plaisir!",
-    "pending": "Votre récompense vous attend. Réclamez-la dans les 30 minutes suivant votre course."
+    "scoring": "Comment marquer des points",
+    "perMetre": "par mètre",
+    "perGarlic": "par sauce à l'ail",
+    "winners": "LES {n} PREMIERS DU CLASSEMENT GAGNENT"
   },
-  "reward": {
-    "free_coke": {
-      "name": "Coke gratuit",
-      "short": "COKE GRATUIT",
-      "goal": "Atteignez {m} m",
-      "terms": "Une boisson gazeuse de 355 mL à l'achat de tout article, dans les restaurants participants. Une par personne. Aucune valeur monétaire."
-    },
-    "free_garlic_sauce": {
-      "name": "Sauce à l'ail gratuite",
-      "short": "SAUCE À L'AIL GRATUITE",
-      "goal": "Attrapez {n} sauces à l'ail",
-      "terms": "Une sauce à l'ail à l'achat de tout article, dans les restaurants participants. Une par personne. Aucune valeur monétaire."
-    },
-    "allGone": "Épuisé pour l'instant",
-    "unlocked": "DÉBLOQUÉ!",
-    "claimed": "RÉCLAMÉ",
-    "needsConnection": "Connexion requise"
+  "campaign": {
+    "notStarted": "Le concours commence le {date}. Échauffez-vous!",
+    "ended": "Le concours est terminé. Consultez les résultats finaux!",
+    "paused": "Le classement est en pause. Jouez pour le plaisir!"
   },
   "hud": {
     "spit": "BROCHE",
     "hot": "CHAUD!",
+    "points": "PTS",
     "pause": "Pause",
     "hint": "Touchez pour sauter · touchez en l'air pour un double saut"
   },
   "canvas": {
     "run": "COURS!",
-    "garlicPlus": "+AIL",
+    "garlicPlus": "+{n}",
     "hits": ["AÏE", "COT COT!", "NOOON", "OUPS"]
   },
   "pause": {
@@ -76,23 +64,13 @@
     "hint": "Touchez n'importe où pour reprendre"
   },
   "milestone": {
-    "m25": "25 M · PAS PIRE",
-    "m50": "50 M · À MI-CHEMIN DU COKE GRATUIT",
-    "m50NoReward": "50 M · À MI-CHEMIN",
-    "m75": "75 M · PRESQUE!",
-    "m100": "100 M!",
+    "first": ["{n} PTS · PAS PIRE", "{n} PTS!", "{n} PTS · LÂCHEZ PAS", "{n} PTS · EN FEU"],
     "every": [
-      "{m} M · LÉGENDAIRE",
-      "{m} M · DITES-LE À VOS AMIS",
-      "{m} M · ÇA VA BIEN?",
-      "{m} M · LE POULET Y CROIT"
+      "{n} PTS · LÉGENDAIRE",
+      "{n} PTS · DITES-LE À VOS AMIS",
+      "{n} PTS · ÇA VA BIEN?",
+      "{n} PTS · LE POULET Y CROIT"
     ]
-  },
-  "unlock": {
-    "coke": "COKE GRATUIT DÉBLOQUÉ!",
-    "garlic": "SAUCE À L'AIL GRATUITE DÉBLOQUÉE!",
-    "distance": "{m} M ATTEINTS!",
-    "garlicCount": "{n} SAUCES À L'AIL!"
   },
   "results": {
     "title": "Repose en pita",
@@ -104,140 +82,104 @@
       "falafel": "Écrasé par un falafel en roue libre.",
       "creep": "La broche était juste derrière, depuis le début."
     },
-    "distance": "DISTANCE",
-    "garlic": "AIL",
-    "hits": "COUPS",
-    "best": "RECORD",
-    "bestLine": "Record : {distance} m · ail {garlic} · coups {hits}",
+    "points": {
+      "one": "POINT",
+      "other": "POINTS"
+    },
+    "byDistance": "{m} m × {x}",
+    "byGarlic": {
+      "one": "{n} sauce à l'ail × {x}",
+      "other": "{n} sauces à l'ail × {x}"
+    },
+    "hits": {
+      "one": "{n} coup",
+      "other": "{n} coups"
+    },
+    "bestLine": {
+      "one": "Votre record : {points} point",
+      "other": "Votre record : {points} points"
+    },
     "newBest": "NOUVEAU RECORD!",
     "checking": "Vérification de votre course…",
     "invalid": "Nous n'avons pas pu vérifier cette course.",
-    "offline": "Les récompenses exigent une connexion. Votre pointage est enregistré sur cet appareil.",
-    "unlockedTitle": "VOUS AVEZ DÉBLOQUÉ",
-    "nothingUnlocked": "Atteignez {m} m ou attrapez {n} sauces à l'ail en une course pour gagner.",
-    "claimMany": "RÉCLAMER MES RÉCOMPENSES",
-    "saveScore": "ENREGISTRER MON POINTAGE",
-    "share": "LANCER UN DÉFI",
-    "rankPreview": "Rang prévu au classement : #{rank}",
-    "scoreSaved": "Pointage enregistré! Rang : #{rank}",
-    "claimWindow": "Réclamez dans les 30 minutes."
+    "offline": "Il faut une connexion pour le classement. Votre record reste sur cet appareil.",
+    "closed": "Le classement est fermé : ces points ne comptent pas.",
+    "savePrompt": "Enregistrez vos points pour entrer au classement. Les {n} premiers gagnent.",
+    "saved": "Enregistré! Votre rang au classement : #{rank}",
+    "savedNoRank": "Points enregistrés.",
+    "wouldRank": "Rang prévu au classement : #{rank}",
+    "saveScore": "ENREGISTRER MES POINTS",
+    "share": "LANCER UN DÉFI"
   },
   "share": {
     "title": "Sauvez le poulet",
     "text": {
-      "one": "J'ai couru {distance} m et attrapé {garlic} sauce à l'ail dans Sauvez le poulet. Pouvez-vous faire mieux?",
-      "other": "J'ai couru {distance} m et attrapé {garlic} sauces à l'ail dans Sauvez le poulet. Pouvez-vous faire mieux?"
+      "one": "J'ai marqué {points} points dans Sauvez le poulet ({distance} m + {garlic} sauce à l'ail). Pouvez-vous finir parmi les {n} premiers?",
+      "other": "J'ai marqué {points} points dans Sauvez le poulet ({distance} m + {garlic} sauces à l'ail). Pouvez-vous finir parmi les {n} premiers?"
     },
     "copied": "COPIÉ! LANCEZ LE DÉFI"
   },
-  "claim": {
-    "titleOne": "Réclamez votre récompense",
-    "titleMany": "Réclamez vos récompenses",
-    "titleSave": "Enregistrez votre pointage",
-    "cta": "RÉCLAMER MA RÉCOMPENSE",
-    "ctaMany": "RÉCLAMER MES RÉCOMPENSES",
-    "ctaSave": "ENREGISTRER MON POINTAGE",
+  "save": {
+    "title": "Enregistrez vos points",
+    "lede": {
+      "one": "Inscrivez votre {points} point au classement.",
+      "other": "Inscrivez vos {points} points au classement."
+    },
+    "cta": "ENREGISTRER MES POINTS",
     "email": "Votre courriel",
-    "emailHint": "Nous y enverrons votre code.",
-    "emailHintSave": "Il sert seulement au classement.",
+    "emailHint": "Jamais affiché au classement. Il sert à vous joindre si vous gagnez.",
     "nickname": "Surnom (facultatif)",
     "nicknameHint": "De 2 à 16 caractères. Affiché au classement. Sans surnom, on vous en donne un.",
     "reroll": "Autre nom",
-    "privacy": "Boustan utilise votre courriel pour vous envoyer votre code et afficher votre pointage, et vous envoie des offres seulement si vous y consentez. Vos données peuvent être traitées à l'extérieur du Québec. Elles sont supprimées 90 jours après la campagne, sauf si vous acceptez de recevoir nos offres. <policy>Politique de confidentialité</policy> · <officer>Responsable de la protection des renseignements personnels</officer>",
-    "sending": "ENVOI…",
-    "recognized": "Envoyer à {email}?",
-    "notYou": "Ce n'est pas vous?",
-    "oneTap": "OUI, ENVOYER MON CODE",
-    "oneTapMany": "OUI, ENVOYER MES CODES",
-    "oneTapSave": "OUI, ENREGISTRER",
+    "privacy": "Boustan utilise votre courriel pour inscrire vos points au classement et pour vous joindre si vous gagnez. Vous recevez des offres seulement si vous y consentez. Vos données peuvent être traitées à l'extérieur du Québec. Elles sont supprimées 90 jours après le concours, sauf si vous gagnez ou acceptez de recevoir nos offres. <policy>Politique de confidentialité</policy> · <officer>Responsable de la protection des renseignements personnels</officer>",
+    "sending": "ENREGISTREMENT…",
     "errors": {
       "email": "Entrez une adresse courriel valide.",
-      "terms": "Confirmez que vous avez 14 ans ou plus et que vous acceptez les conditions.",
+      "terms": "Confirmez que vous avez 14 ans ou plus et que vous acceptez le règlement du concours.",
       "nickname": "De 2 à 16 lettres, chiffres, espaces ou - _ . '",
       "nicknameRude": "Choisissez un autre surnom. Celui-ci ne peut pas figurer au classement.",
-      "network": "Un problème est survenu. Votre récompense vous attend : réessayez.",
-      "expired": "Cette récompense a expiré. On peut la réclamer jusqu'à 30 minutes après la course.",
+      "network": "Un problème est survenu. Vos points ne sont pas perdus : réessayez.",
+      "expired": "Ces points ne peuvent plus être enregistrés. On peut enregistrer ses points jusqu'à 30 minutes après la course.",
       "rejected": "Nous n'avons pas pu traiter cette demande.",
-      "badEmail": "Utilisez une adresse courriel permanente. Les boîtes temporaires ne peuvent pas recevoir de récompenses.",
-      "notRecognized": "Nous n'avons pas retrouvé votre courriel. Entrez-le de nouveau.",
-      "tooMany": "Trop de tentatives. Attendez un peu, puis réessayez."
+      "badEmail": "Utilisez une adresse courriel permanente. Les adresses temporaires ne sont pas acceptées.",
+      "tooMany": "Trop de tentatives. Attendez un peu, puis réessayez.",
+      "closed": "Le classement est fermé : ces points ne peuvent pas être enregistrés."
     }
   },
   "consent": {
-    "version": "fr-2026-10-06-draft",
-    "terms": "J'ai 14 ans ou plus et j'accepte les <terms>conditions de l'offre</terms> et la <privacy>politique de confidentialité</privacy>.",
-    "marketing": "Envoyez-moi les offres et nouvelles de Boustan par courriel. Désabonnement en tout temps.",
-    "withdrawn": "Désabonnement des offres et nouvelles de Boustan par courriel."
+    "version": "fr-2026-10-07-draft",
+    "terms": "J'ai 14 ans ou plus et j'accepte le <terms>règlement du concours</terms> et la <privacy>politique de confidentialité</privacy>.",
+    "marketing": "Envoyez-moi les offres et nouvelles de Boustan par courriel. Désabonnement en tout temps."
   },
-  "coupon": {
-    "title": "Votre code",
-    "titleMany": "Vos codes",
-    "expires": "Expire le {date}",
-    "howTo": "Montrez ce code au comptoir ou entrez-le dans l'appli Boustan.",
-    "fullTerms": "Conditions complètes",
-    "sentTo": "Aussi envoyé à {email}",
-    "alreadyClaimed": "Déjà réclamé : nous vous avons renvoyé votre code.",
-    "resend": "RENVOYER LE COURRIEL",
-    "resent": "COURRIEL ENVOYÉ",
-    "copyLabel": "Copier le code pour {reward}",
-    "titleNone": "Épuisé pour l'instant",
-    "unavailable": "{reward} : épuisé pour l'instant."
+  "saved": {
+    "title": "Vous êtes au classement",
+    "titleNoRank": "Vos points sont enregistrés",
+    "rank": "RANG",
+    "winners": "Les {n} premiers du classement gagnent. Seule votre meilleure course compte : continuez de jouer!",
+    "winnersUntil": "À la fin du concours, le {date}, les {n} premiers du classement gagnent. Seule votre meilleure course compte : continuez de jouer!"
   },
   "lb": {
     "title": "Classement",
+    "live": "Les {n} premiers gagnent.",
+    "liveUntil": "Les {n} premiers gagnent à la fin du concours, le {date}.",
+    "final": "Résultats finaux : les {n} premiers ont gagné.",
     "rank": "#",
     "name": "NOM",
-    "garlic": "AIL",
-    "hits": "COUPS",
-    "distance": "DIST.",
-    "flawless": "SANS FAUTE",
+    "points": "POINTS",
+    "winner": "GAGNANT",
     "you": "Vous : #{rank}",
     "youRow": "VOUS",
-    "empty": "Aucun pointage pour l'instant.",
+    "empty": "Personne au classement pour l'instant.",
     "error": "Le classement n'est pas disponible pour l'instant.",
-    "caption": "Classement par sauces à l'ail, puis le moins de coups, puis la distance."
-  },
-  "myRewards": {
-    "title": "Mes récompenses",
-    "empty": "Aucune récompense pour l'instant."
+    "caption": "Classement par points : {m} par mètre, {g} par sauce à l'ail. En cas d'égalité, le premier arrivé passe devant."
   },
   "gate": {
     "tooSmall": "Cet espace est trop petit pour jouer.",
     "fullScreen": "JOUER EN PLEIN ÉCRAN"
   },
-  "email": {
-    "subject": {
-      "free_coke": "Votre Coke gratuit vous attend",
-      "free_garlic_sauce": "Votre sauce à l'ail gratuite vous attend",
-      "both": "Votre Coke et votre sauce à l'ail gratuits vous attendent"
-    },
-    "preview": "Votre code Boustan est à l'intérieur. Montrez-le au comptoir ou entrez-le dans l'appli.",
-    "heading": "Vous avez sauvé le poulet!",
-    "intro": "Voici votre récompense. Montrez le code au comptoir ou entrez-le dans l'appli Boustan.",
-    "introMany": "Voici vos récompenses. Montrez chaque code au comptoir ou entrez-le dans l'appli Boustan.",
-    "resent": "Comme demandé, voici de nouveau vos codes.",
-    "code": "Code",
-    "expires": "Expire le {date}",
-    "howToTitle": "Comment l'utiliser",
-    "findBoustan": "Trouver mon Boustan",
-    "orderOnline": "Commander en ligne",
-    "playAgain": "Rejouer",
-    "otherLanguage": "English version",
-    "footer": "Vous recevez ce courriel parce que vous avez réclamé une récompense dans Sauvez le poulet.",
-    "privacy": "Politique de confidentialité",
-    "unsubscribe": "Se désabonner des offres",
-    "contact": "Contact : {email}",
-    "viewInvalid": "Ce lien n'est pas valide."
-  },
   "notFound": {
     "title": "Page introuvable",
     "body": "Cette page a pris la fuite. Le poulet, lui, court encore.",
     "cta": "Retour au jeu"
-  },
-  "unsubscribe": {
-    "title": "Désabonnement confirmé",
-    "body": "Vous ne recevrez plus les offres et nouvelles de Boustan par courriel. Vos codes de récompense restent valides.",
-    "invalid": "Ce lien de désabonnement n'est pas valide. Écrivez-nous et nous nous en occuperons.",
-    "play": "Retour au jeu"
   }
 }

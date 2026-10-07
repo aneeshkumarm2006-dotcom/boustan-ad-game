@@ -17,7 +17,7 @@ const dev = process.env.NODE_ENV === "development";
 const TURNSTILE = "https://challenges.cloudflare.com";
 
 /**
- * Game page CSP (SEC-09). Everything is same-origin except Turnstile on the claim form
+ * Game page CSP (SEC-09). Everything is same-origin except Turnstile on the save form
  * (EMB-11). Scripts keep 'unsafe-inline': the page is static, and Next's inline bootstrap
  * scripts can only carry a nonce on a page rendered per request (DECISIONS.md).
  */
@@ -74,11 +74,9 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_CLIENT_VERSION: (process.env.VERCEL_GIT_COMMIT_SHA ?? "dev").slice(0, 12),
   },
   poweredByHeader: false,
-  // Code-pool CSV uploads go through a server action; the app caps files at 5 MB.
-  experimental: { serverActions: { bodySizeLimit: "6mb" } },
   async headers() {
     // A CSP set here wins over one a route sets itself, so each path gets exactly one: the
-    // game's, the JSON API's, or (unsubscribe and the email view) the route's own.
+    // game's, the admin's or the JSON API's.
     return [
       { source: "/:path*", headers: security },
       {
@@ -95,7 +93,7 @@ const nextConfig: NextConfig = {
         ],
       },
       {
-        source: "/api/:path((?!unsubscribe|email/view).*)",
+        source: "/api/:path*",
         headers: [{ key: "Content-Security-Policy", value: apiCsp }],
       },
     ];

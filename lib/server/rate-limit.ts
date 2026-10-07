@@ -1,10 +1,10 @@
 /**
  * Rate limits (SEC-06) on Upstash Redis, sliding windows. Defaults follow the PRD and can be
- * overridden without a code change: RATE_LIMITS="claimIp=10/3600,runStart=120/3600".
+ * overridden without a code change: RATE_LIMITS="saveIp=10/3600,runStart=120/3600".
  *
  * Without Upstash credentials (dev, tests) an in-memory limiter per server instance stands in.
  * If Redis is slow or down, requests are allowed: a limiter outage must not take the game
- * down, and the claim path has its own database-level guarantees (SEC-07, RWD-03).
+ * down, and the save path has its own database-level guarantees (SEC-04, SEC-07).
  */
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
@@ -19,14 +19,8 @@ export interface Rule {
 export const DEFAULT_LIMITS = {
   /** Run starts per IP. */
   runStart: { limit: 60, windowS: 3600 },
-  /** Claims and "Save my score" per IP. */
-  claimIp: { limit: 5, windowS: 3600 },
-  /** Claims per player token per day. */
-  claimPlayer: { limit: 3, windowS: 86_400 },
-  /** Coupon re-sends per email (MAIL-08), including "already claimed" re-sends. */
-  resendEmail: { limit: 3, windowS: 3600 },
-  /** Resend requests per IP, so the endpoint can't be used to probe many addresses. */
-  resendIp: { limit: 20, windowS: 3600 },
+  /** "Save my score" per IP. */
+  saveIp: { limit: 5, windowS: 3600 },
   /** Leaderboard reads per IP. */
   leaderboard: { limit: 120, windowS: 60 },
   /** Admin sign-in links per IP and per address. */

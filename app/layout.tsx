@@ -12,7 +12,8 @@ function baseUrl(): URL {
 }
 
 const TITLE = "Boustan | Sauvez le poulet / Save the Chicken";
-const DESCRIPTION = "Jeu bilingue Boustan : sauvez le poulet et gagnez des récompenses.";
+const DESCRIPTION =
+  "Jeu bilingue Boustan : sauvez le poulet, marquez des points et visez les 3 premières places du classement.";
 
 export const metadata: Metadata = {
   metadataBase: baseUrl(),

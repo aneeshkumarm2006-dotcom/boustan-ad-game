@@ -6,13 +6,12 @@ export const CLIENT_EVENTS = [
   "load",
   "start",
   "milestone",
-  "reward_unlocked",
   "game_over",
   "results_view",
-  "claim_view",
-  "claim_submit",
-  "claim_success",
-  "claim_error",
+  "save_view",
+  "save_submit",
+  "save_success",
+  "save_error",
   "leaderboard_view",
   "share_click",
   "cta_click",
@@ -21,7 +20,7 @@ export const CLIENT_EVENTS = [
 ] as const;
 export type ClientEvent = (typeof CLIENT_EVENTS)[number];
 
-export const SERVER_EVENTS = ["email_sent", "email_bounced", "opt_in", "api_claim"] as const;
+export const SERVER_EVENTS = ["opt_in", "api_save"] as const;
 export type ServerEvent = (typeof SERVER_EVENTS)[number];
 
 export type EventProps = Record<string, string | number | boolean>;

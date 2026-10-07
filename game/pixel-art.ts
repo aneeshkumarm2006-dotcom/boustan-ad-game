@@ -159,29 +159,6 @@ export const ART = {
       c: mix(P.toum, P.vert, 0.3),
     },
   },
-  /** GAME-13: a plain soda can. No brand name or logo until Boustan confirms the rights. */
-  can: {
-    rows: [
-      ".ssssss.",
-      "SssssssS",
-      "RRRRRRRr",
-      "RhRRRRRr",
-      "RhRRRRRr",
-      "RhRRRRRr",
-      "RhRRRRRr",
-      "RhRRRRRr",
-      "RRRRRRRr",
-      "SssssssS",
-      ".SSSSSS.",
-    ],
-    palette: {
-      s: mix(P.toum, P.vert, 0.15),
-      S: mix(P.toum, P.vert, 0.4),
-      R: P.tomate,
-      r: mix(P.tomate, P.vert, 0.35),
-      h: mix(P.tomate, P.toum, 0.4),
-    },
-  },
 } satisfies Record<string, PixelArt>;
 
 export type ArtName = keyof typeof ART;

@@ -1,9 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * End to end against the real API and a real MongoDB (Stage 2 "done when"): a claim with a
- * test pool, the sandboxed email, unsubscribe, and a forged run. Needs a replica set:
- * LIVE_MONGODB_URI, or `npm run db:local` running (a separate boustan_e2e database is used).
+ * End to end against the real API and a real MongoDB: a real run scored on the server and saved
+ * to the leaderboard, the admin winners page and export, forged runs and security headers. Needs
+ * a replica set: LIVE_MONGODB_URI, or `npm run db:local` running (a separate boustan_e2e
+ * database is used).
  *
  *   npm run test:e2e:live
  *
@@ -36,6 +37,9 @@ export default defineConfig({
       APP_URL: `http://localhost:${PORT}`,
       EMAIL_SANDBOX: "1",
       EMAIL_API_KEY: "",
+      // The admin sign-in link is shown on the login page instead of being emailed.
+      ADMIN_EMAILS: "admin@e2e.test",
+      ADMIN_DEV_LINK: "1",
       TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
       NEXT_PUBLIC_TURNSTILE_SITE_KEY: "1x00000000000000000000BB",
       UPSTASH_REDIS_REST_URL: "",

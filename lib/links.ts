@@ -16,7 +16,7 @@ const URLS = {
     fr: "https://www.boustan.ca/fr/locations",
     en: "https://www.boustan.ca/locations",
   },
-  /** Offer terms, privacy policy and privacy officer contact. */
+  /** Contest rules, privacy policy and privacy officer contact. */
   terms: { fr: "https://www.boustan.ca/fr", en: "https://www.boustan.ca/" },
   privacy: { fr: "https://www.boustan.ca/fr", en: "https://www.boustan.ca/" },
   privacyOfficer: { fr: "https://www.boustan.ca/fr", en: "https://www.boustan.ca/" },
@@ -24,26 +24,18 @@ const URLS = {
 
 export type LinkTarget = keyof typeof URLS;
 
-/**
- * Adds utm_source=game&utm_medium=embed&utm_campaign=<campaign>&utm_content=<src>. Links in the
- * coupon email use utm_medium=email.
- */
-export function withUtm(url: string, src: string | null, medium: "embed" | "email" = "embed") {
+/** Adds utm_source=game&utm_medium=embed&utm_campaign=<campaign>&utm_content=<src>. */
+export function withUtm(url: string, src: string | null) {
   const u = new URL(url);
   u.searchParams.set("utm_source", "game");
-  u.searchParams.set("utm_medium", medium);
+  u.searchParams.set("utm_medium", "embed");
   u.searchParams.set("utm_campaign", CAMPAIGN_ID);
   if (src) u.searchParams.set("utm_content", src);
   return u.toString();
 }
 
-export function outboundUrl(
-  target: LinkTarget,
-  lang: Lang,
-  src: string | null,
-  medium: "embed" | "email" = "embed",
-): string {
-  return withUtm(URLS[target][lang], src, medium);
+export function outboundUrl(target: LinkTarget, lang: Lang, src: string | null): string {
+  return withUtm(URLS[target][lang], src);
 }
 
 /**
