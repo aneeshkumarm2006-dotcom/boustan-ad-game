@@ -6,7 +6,7 @@ import { signOut } from "./actions";
 
 /** Everything under /admin except the login page: needs a session, shows the nav. */
 export default async function PanelLayout({ children }: { children: React.ReactNode }) {
-  const email = await requireAdmin();
+  const admin = await requireAdmin();
   return (
     <>
       <header className="adm-top">
@@ -16,7 +16,7 @@ export default async function PanelLayout({ children }: { children: React.ReactN
           </Link>
           <AdminNav />
           <div className="adm-who">
-            <span>{email}</span>
+            <span>{admin}</span>
             <form action={signOut}>
               <button type="submit" className="adm-btn ghost small">
                 Sign out

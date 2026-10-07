@@ -1,124 +1,114 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetEnvForTests } from "../env";
 import { resetMemoryLimitsForTests } from "../rate-limit";
-import type { OutgoingEmail } from "../email/sender";
-import { signToken } from "../tokens";
+import { adminPasswordStamp, signToken } from "../tokens";
 import {
+  ADMIN_NAME,
   SESSION_COOKIE,
   adminFromRequest,
   adminFromSession,
-  requestLoginLink,
-  sessionFromLoginToken,
+  signInWithPassword,
 } from "./auth";
 
-const sent: OutgoingEmail[] = [];
-const send = async (e: OutgoingEmail) => {
-  sent.push(e);
-  return { id: "x" };
-};
+const PASSWORD = "correct horse battery";
 
 beforeEach(() => {
-  sent.length = 0;
-  process.env.ADMIN_EMAILS = "Boss@Boustan.test, ops@boustan.test";
-  process.env.ADMIN_DEV_LINK = "";
+  process.env.ADMIN_PASSWORD = PASSWORD;
   resetEnvForTests();
   resetMemoryLimitsForTests();
 });
 afterEach(() => {
-  delete process.env.ADMIN_EMAILS;
-  delete process.env.ADMIN_DEV_LINK;
+  delete process.env.ADMIN_PASSWORD;
   resetEnvForTests();
 });
 
-const tokenOf = (link: string) => new URL(link).searchParams.get("t")!;
+/** A session token exactly as signInWithPassword builds one, with a chosen expiry. */
+const sessionFor = (password: string, exp: number) =>
+  signToken("admin_session", { v: 1, p: adminPasswordStamp(password), exp });
 
 describe("admin sign-in (ADM-01)", () => {
-  it("emails a link to a listed address, whatever the case", async () => {
-    const res = await requestLoginLink("  BOSS@boustan.test ", "198.51.100.1", send);
-    expect(res).toEqual({ ok: true, devLink: undefined });
-    expect(sent).toHaveLength(1);
-    expect(sent[0].to).toBe("boss@boustan.test");
-    expect(sent[0].text).toContain("/admin/verify?t=");
-    expect(sent[0].html).toContain("/admin/verify?t=");
+  it("gives a session for the right password, ignoring spaces around it", async () => {
+    const res = await signInWithPassword(`  ${PASSWORD} `, "198.51.100.1");
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(adminFromSession(res.session)).toBe(ADMIN_NAME);
   });
 
-  it("sends nothing to an address that isn't listed, and answers the same", async () => {
-    const res = await requestLoginLink("stranger@example.com", "198.51.100.1", send);
-    expect(res).toEqual({ ok: true });
-    expect(sent).toEqual([]);
+  it("refuses a wrong, empty or oversized password", async () => {
+    for (const bad of ["nope", "", PASSWORD.toUpperCase(), "x".repeat(5000)]) {
+      expect(await signInWithPassword(bad, "198.51.100.2")).toEqual({ ok: false, reason: "wrong" });
+    }
   });
 
-  it("returns the link on the page only with ADMIN_DEV_LINK=1, and only for listed addresses", async () => {
-    process.env.ADMIN_DEV_LINK = "1";
+  it("lets nobody in while ADMIN_PASSWORD is blank", async () => {
+    process.env.ADMIN_PASSWORD = "   ";
     resetEnvForTests();
-    const listed = await requestLoginLink("ops@boustan.test", null, send);
-    expect(listed.ok && listed.devLink).toContain("/admin/verify?t=");
-    const unlisted = await requestLoginLink("x@example.com", null, send);
-    expect(unlisted.ok && unlisted.devLink).toBeUndefined();
+    expect(await signInWithPassword("   ", null)).toEqual({ ok: false, reason: "not_configured" });
+    expect(await signInWithPassword("", null)).toEqual({ ok: false, reason: "not_configured" });
+    expect(adminFromSession(sessionFor("", Date.now() + 60_000))).toBeNull();
   });
 
-  it("limits sign-in links per address and per IP", async () => {
+  it("limits attempts per IP, and the limit applies to the right password too", async () => {
     let limited = false;
     for (let i = 0; i < 12; i++) {
-      const res = await requestLoginLink("boss@boustan.test", "198.51.100.5", send);
-      if (!res.ok) limited = true;
+      const res = await signInWithPassword("guess", "198.51.100.5");
+      if (!res.ok && res.reason === "rate_limited") limited = true;
     }
     expect(limited).toBe(true);
-    expect(sent.length).toBeLessThanOrEqual(10);
+    expect(await signInWithPassword(PASSWORD, "198.51.100.5")).toEqual({
+      ok: false,
+      reason: "rate_limited",
+    });
+    // Another address is not affected.
+    expect((await signInWithPassword(PASSWORD, "198.51.100.6")).ok).toBe(true);
   });
+});
 
-  it("turns a fresh link into a session for that admin", async () => {
-    await requestLoginLink("boss@boustan.test", null, send);
-    const link = /https?:\/\/\S+\/admin\/verify\?t=[^\s"<]+/.exec(sent[0].text)![0];
-    const session = sessionFromLoginToken(decodeURIComponent(tokenOf(link)));
-    expect(session).not.toBeNull();
-    expect(adminFromSession(session!)).toBe("boss@boustan.test");
-  });
-
-  it("refuses an expired link, a forged one, and one for an address since removed", () => {
+describe("admin session", () => {
+  it("ends on expiry", () => {
     const now = Date.now();
-    const old = signToken("admin_login", { v: 1, e: "boss@boustan.test", exp: now - 1 });
-    expect(sessionFromLoginToken(old, now)).toBeNull();
-    expect(sessionFromLoginToken("abc.def", now)).toBeNull();
-    const stranger = signToken("admin_login", { v: 1, e: "x@example.com", exp: now + 60_000 });
-    expect(sessionFromLoginToken(stranger, now)).toBeNull();
+    const live = sessionFor(PASSWORD, now + 1000);
+    expect(adminFromSession(live, now)).toBe(ADMIN_NAME);
+    expect(adminFromSession(live, now + 2000)).toBeNull();
+    expect(adminFromSession(undefined)).toBeNull();
+    expect(adminFromSession("abc.def")).toBeNull();
   });
 
-  it("does not accept one kind of token as another", () => {
+  it("ends when the password changes", () => {
+    const live = sessionFor(PASSWORD, Date.now() + 60_000);
+    expect(adminFromSession(live)).toBe(ADMIN_NAME);
+    process.env.ADMIN_PASSWORD = "a different password";
+    resetEnvForTests();
+    expect(adminFromSession(live)).toBeNull();
+  });
+
+  it("refuses a token for the wrong password and one signed as another kind", () => {
     const now = Date.now();
-    const asSession = signToken("admin_session", { v: 1, e: "boss@boustan.test", exp: now + 1e6 });
-    expect(sessionFromLoginToken(asSession, now)).toBeNull();
-    const asLogin = signToken("admin_login", { v: 1, e: "boss@boustan.test", exp: now + 1e6 });
-    expect(adminFromSession(asLogin, now)).toBeNull();
+    expect(adminFromSession(sessionFor("someone else's", now + 60_000))).toBeNull();
+    const asRun = signToken("run", { v: 1, p: adminPasswordStamp(PASSWORD), exp: now + 60_000 });
+    expect(adminFromSession(asRun)).toBeNull();
     const save = signToken("save", {
       v: 1,
       run: "00000000-0000-4000-8000-000000000000",
       exp: now + 1e6,
     });
-    expect(adminFromSession(save, now)).toBeNull();
+    expect(adminFromSession(save)).toBeNull();
   });
 
-  it("ends a session on expiry, and when the address leaves ADMIN_EMAILS", () => {
-    const now = Date.now();
-    const live = signToken("admin_session", { v: 1, e: "boss@boustan.test", exp: now + 1000 });
-    expect(adminFromSession(live, now)).toBe("boss@boustan.test");
-    expect(adminFromSession(live, now + 2000)).toBeNull();
-    process.env.ADMIN_EMAILS = "ops@boustan.test";
-    resetEnvForTests();
-    expect(adminFromSession(live, now)).toBeNull();
-    expect(adminFromSession(undefined)).toBeNull();
+  it("is not the password and does not contain it", async () => {
+    const res = await signInWithPassword(PASSWORD, null);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const body = Buffer.from(res.session.split(".")[0], "base64url").toString("utf8");
+    expect(body).not.toContain(PASSWORD);
+    expect(res.session).not.toContain(PASSWORD);
   });
 
-  it("reads the session from a request's cookie header", () => {
-    const token = signToken("admin_session", {
-      v: 1,
-      e: "ops@boustan.test",
-      exp: Date.now() + 60_000,
-    });
+  it("is read from a request's cookie header", () => {
+    const token = sessionFor(PASSWORD, Date.now() + 60_000);
     const req = (cookie: string) =>
       new Request("https://game.test/api/admin/x", { headers: { cookie } });
     expect(adminFromRequest(req(`a=1; ${SESSION_COOKIE}=${encodeURIComponent(token)}; b=2`))).toBe(
-      "ops@boustan.test",
+      ADMIN_NAME,
     );
     expect(adminFromRequest(req("a=1"))).toBeNull();
     expect(adminFromRequest(req(`${SESSION_COOKIE}=garbage`))).toBeNull();

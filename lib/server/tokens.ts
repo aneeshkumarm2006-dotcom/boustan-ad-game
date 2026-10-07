@@ -8,7 +8,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypt
 import { z } from "zod";
 import { env } from "./env";
 
-export type TokenKind = "run" | "save" | "email_key" | "admin_login" | "admin_session";
+export type TokenKind = "run" | "save" | "email_key" | "admin_session";
 
 const keys = new Map<string, Buffer>();
 function keyFor(kind: TokenKind, secret: string): Buffer {
@@ -92,19 +92,20 @@ export const saveTokenSchema = z.object({
 });
 export type SaveToken = z.infer<typeof saveTokenSchema>;
 
-/** The magic link emailed to an admin (ADM-01): valid for 15 minutes. */
-export const adminLoginTokenSchema = z.object({
+/**
+ * The admin session cookie (ADM-01): 12 hours. `p` stamps the ADMIN_PASSWORD it was issued for
+ * (an HMAC, never the password), so changing the password signs every admin out.
+ */
+export const adminSessionTokenSchema = z.object({
   v: z.literal(1),
-  e: z.string().max(320),
+  p: z.string().max(64),
   exp: z.number().int(),
 });
 
-/** The admin session cookie: 12 hours, and checked against ADMIN_EMAILS on every request. */
-export const adminSessionTokenSchema = z.object({
-  v: z.literal(1),
-  e: z.string().max(320),
-  exp: z.number().int(),
-});
+/** Stamp of the current admin password, for the session cookie. Not reversible without the secret. */
+export function adminPasswordStamp(password: string, secret = env().RUN_TOKEN_SECRET): string {
+  return createHmac("sha256", secret).update(`admin-password:${password}`).digest("base64url");
+}
 
 // ---------- opaque tokens and hashes ----------
 

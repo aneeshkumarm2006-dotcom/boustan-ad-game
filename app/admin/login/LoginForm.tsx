@@ -1,47 +1,41 @@
 "use client";
 
 import { useActionState } from "react";
-import { requestLink, type LoginState } from "./actions";
+import { signIn, type LoginState } from "./actions";
 
 export function LoginForm() {
-  const [state, action, pending] = useActionState<LoginState, FormData>(requestLink, null);
+  const [state, action, pending] = useActionState<LoginState, FormData>(signIn, null);
   return (
     <form action={action} className="adm-form">
       <div className="adm-field">
-        <label htmlFor="admin-email">Work email</label>
+        <label htmlFor="admin-password">Password</label>
         <input
-          id="admin-email"
-          name="email"
-          type="email"
-          autoComplete="email"
+          id="admin-password"
+          name="password"
+          type="password"
+          autoComplete="current-password"
           required
           autoFocus
-          maxLength={254}
+          maxLength={200}
         />
-        <small>We email you a sign-in link, valid for 15 minutes.</small>
       </div>
       <button type="submit" className="adm-btn main" disabled={pending}>
-        {pending ? "Sending…" : "Email me a sign-in link"}
+        {pending ? "Signing in…" : "Sign in"}
       </button>
-      {state?.status === "invalid" && (
+      {state?.status === "wrong" && (
         <p className="adm-msg err" role="alert">
-          Enter a valid email address.
+          Wrong password.
         </p>
       )}
-      {state?.status === "limited" && (
+      {state?.status === "rate_limited" && (
         <p className="adm-msg err" role="alert">
           Too many attempts. Try again in a while.
         </p>
       )}
-      {state?.status === "sent" && (
-        <div className="adm-msg ok" role="status">
-          If that address can sign in, a link is on its way.
-          {state.devLink && (
-            <p style={{ marginTop: 8 }}>
-              Demo mode: <a href={state.devLink}>open the sign-in link</a>
-            </p>
-          )}
-        </div>
+      {state?.status === "not_configured" && (
+        <p className="adm-msg err" role="alert">
+          Sign-in is not set up: ADMIN_PASSWORD is empty.
+        </p>
       )}
     </form>
   );

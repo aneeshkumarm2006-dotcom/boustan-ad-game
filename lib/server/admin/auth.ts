@@ -1,96 +1,64 @@
 /**
- * Admin sign-in (ADM-01): a magic link emailed to an address in ADMIN_EMAILS, which sets a
- * signed 12-hour session cookie. The cookie is httpOnly and SameSite=Lax, and every request
- * checks the address is still on the list, so removing someone from ADMIN_EMAILS signs them
- * out at once. Nothing says whether an address is on the list.
+ * Admin sign-in (ADM-01): one shared password, ADMIN_PASSWORD, which sets a signed 12-hour
+ * session cookie. The cookie is httpOnly and SameSite=Lax. It carries a stamp of the password it
+ * was issued for, so changing ADMIN_PASSWORD signs every admin out at once. With no password set,
+ * nobody can sign in.
  *
  * The game itself sets no cookies (EMB-07); this one belongs to /admin and is never sent from
  * the iframe's own requests.
  */
 import "server-only";
-import { randomUUID } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { escapeHtml } from "../pages";
 import { env } from "../env";
 import { log } from "../log";
 import { rateLimit } from "../rate-limit";
-import { defaultSender, type Sender } from "../email/sender";
-import {
-  adminLoginTokenSchema,
-  adminSessionTokenSchema,
-  emailKey,
-  signToken,
-  verifyToken,
-} from "../tokens";
+import { adminPasswordStamp, adminSessionTokenSchema, signToken, verifyToken } from "../tokens";
 
 export const SESSION_COOKIE = "boustan_admin";
-const LOGIN_TTL_MS = 15 * 60 * 1000;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const MAX_PASSWORD_LENGTH = 200;
 
-export function isAdminEmail(email: string): boolean {
-  return env().adminEmails.includes(email.trim().toLowerCase());
-}
+/** Everyone shares one login, so this is the name the audit log records. */
+export const ADMIN_NAME = "admin";
 
 export type LoginOutcome =
-  | { ok: true; /** Only with ADMIN_DEV_LINK=1 and a listed address. */ devLink?: string }
-  | { ok: false; reason: "rate_limited" };
+  | { ok: true; session: string }
+  | { ok: false; reason: "wrong" | "rate_limited" | "not_configured" };
 
-/**
- * Emails a sign-in link if the address is allowed. The caller shows the same message either
- * way. With ADMIN_DEV_LINK=1 (dev and demos) the link is also returned, for a listed address.
- */
-export async function requestLoginLink(
-  rawEmail: string,
+/** Constant-time comparison: both sides are hashed first, so length doesn't leak. */
+function samePassword(given: string, expected: string): boolean {
+  const a = createHash("sha256").update(given).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
+/** Checks the password and, if it is right, returns a session token for the cookie. */
+export async function signInWithPassword(
+  rawPassword: string,
   ip: string | null,
-  send: Sender = defaultSender,
   now = Date.now(),
 ): Promise<LoginOutcome> {
-  const email = rawEmail.trim().toLowerCase().slice(0, 320);
-  const byIp = await rateLimit("adminLogin", `ip:${ip ?? "unknown"}`);
-  const byEmail = await rateLimit("adminLogin", `email:${emailKey(email)}`);
-  if (!byIp.ok || !byEmail.ok) return { ok: false, reason: "rate_limited" };
-  if (!isAdminEmail(email)) {
-    log.warn("admin_login_unlisted");
-    return { ok: true };
+  const expected = env().ADMIN_PASSWORD;
+  if (!expected) {
+    log.warn("admin_login_not_configured");
+    return { ok: false, reason: "not_configured" };
   }
-  const token = signToken("admin_login", { v: 1, e: email, exp: now + LOGIN_TTL_MS });
-  const link = `${env().appUrl}/admin/verify?t=${encodeURIComponent(token)}`;
-  const { subject, html, text } = loginEmail(link);
-  try {
-    await send({
-      to: email,
-      subject,
-      html,
-      text,
-      headers: {},
-      idempotencyKey: `admin-login-${randomUUID()}`,
-      tags: [{ name: "kind", value: "admin_login" }],
-    });
-  } catch (error) {
-    await log.error("admin_login_email_failed", error);
+  const limit = await rateLimit("adminLogin", `ip:${ip ?? "unknown"}`);
+  if (!limit.ok) return { ok: false, reason: "rate_limited" };
+  const password = rawPassword.trim();
+  if (password.length > MAX_PASSWORD_LENGTH || !samePassword(password, expected)) {
+    log.warn("admin_login_failed");
+    return { ok: false, reason: "wrong" };
   }
-  log.info("admin_login_link_sent");
-  return { ok: true, devLink: env().ADMIN_DEV_LINK ? link : undefined };
-}
-
-function loginEmail(link: string) {
-  const href = escapeHtml(link);
-  return {
-    subject: "Boustan admin: your sign-in link / Votre lien de connexion",
-    html: `<p>Sign in to the Boustan game admin (valid 15 minutes):</p>
-<p><a href="${href}">${href}</a></p>
-<p>Connectez-vous à l'administration du jeu Boustan (valide 15 minutes) : lien ci-dessus.</p>
-<p>If you didn't ask for this, ignore this email.</p>`,
-    text: `Sign in to the Boustan game admin (valid 15 minutes):\n${link}\n\nConnectez-vous à l'administration du jeu Boustan (valide 15 minutes) : lien ci-dessus.\nIf you didn't ask for this, ignore this email.`,
-  };
-}
-
-/** Turns a magic-link token into a session token, or null. */
-export function sessionFromLoginToken(token: string, now = Date.now()): string | null {
-  const payload = verifyToken("admin_login", token, adminLoginTokenSchema);
-  if (!payload || payload.exp < now || !isAdminEmail(payload.e)) return null;
-  return signToken("admin_session", { v: 1, e: payload.e, exp: now + SESSION_TTL_MS });
+  log.info("admin_login");
+  const session = signToken("admin_session", {
+    v: 1,
+    p: adminPasswordStamp(expected),
+    exp: now + SESSION_TTL_MS,
+  });
+  return { ok: true, session };
 }
 
 export function sessionCookieOptions() {
@@ -103,12 +71,14 @@ export function sessionCookieOptions() {
   };
 }
 
-/** The signed-in admin's email from a session token, or null. */
+/** The admin's name from a session token, or null if it is missing, forged, expired or stale. */
 export function adminFromSession(token: string | undefined, now = Date.now()): string | null {
   if (!token) return null;
+  const expected = env().ADMIN_PASSWORD;
+  if (!expected) return null;
   const payload = verifyToken("admin_session", token, adminSessionTokenSchema);
-  if (!payload || payload.exp < now || !isAdminEmail(payload.e)) return null;
-  return payload.e;
+  if (!payload || payload.exp < now || payload.p !== adminPasswordStamp(expected)) return null;
+  return ADMIN_NAME;
 }
 
 /** For route handlers: the admin behind this request's cookie, or null. */
@@ -120,10 +90,10 @@ export function adminFromRequest(request: Request): string | null {
   );
 }
 
-/** For pages and server actions: the admin's email, or a redirect to the login page. */
+/** For pages and server actions: the admin's name, or a redirect to the login page. */
 export async function requireAdmin(): Promise<string> {
   const jar = await cookies();
-  const email = adminFromSession(jar.get(SESSION_COOKIE)?.value);
-  if (!email) redirect("/admin/login");
-  return email;
+  const admin = adminFromSession(jar.get(SESSION_COOKIE)?.value);
+  if (!admin) redirect("/admin/login");
+  return admin;
 }

@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { createDb } from "../db/client";
 import { newPlayer } from "../db/schema";
 import { cheat, lastResult, setHeat, snapshot, stcReady } from "../e2e/helpers";
-import { LIVE_MONGODB_URI } from "../playwright.live.config";
+import { ADMIN_PASSWORD, LIVE_MONGODB_URI } from "../playwright.live.config";
 
 const { db, client } = createDb(LIVE_MONGODB_URI, { max: 2 });
 test.afterAll(() => client.close());
@@ -144,10 +144,12 @@ test("the admin sees the winners, can reach them and exports them", async ({ pag
   await page.goto("/admin/leaderboard");
   await expect(page).toHaveURL(/\/admin\/login/);
 
-  // Sign in with the demo link (ADMIN_DEV_LINK), as the README describes.
-  await page.getByLabel("Work email").fill("admin@e2e.test");
-  await page.getByRole("button", { name: "Email me a sign-in link" }).click();
-  await page.getByRole("link", { name: "open the sign-in link" }).click();
+  // A wrong password is refused; the right one signs in.
+  await page.getByLabel("Password").fill("not-the-password");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await expect(page.getByText("Wrong password.")).toBeVisible();
+  await page.getByLabel("Password").fill(ADMIN_PASSWORD);
+  await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page).toHaveURL(/\/admin$/);
 
   await page.goto("/admin/leaderboard");
@@ -171,7 +173,7 @@ test("the admin sees the winners, can reach them and exports them", async ({ pag
     ["3", "third@e2e.test", "Bronze", "1000"],
   ]);
   const logged = await db.adminAudit.findOne({ action: "export.winners" });
-  expect(logged).toMatchObject({ adminEmail: "admin@e2e.test" });
+  expect(logged).toMatchObject({ adminEmail: "admin" });
 
   // Hiding a winner moves the next player up.
   await page.goto("/admin/leaderboard");

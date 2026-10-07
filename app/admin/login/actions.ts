@@ -1,20 +1,24 @@
 "use server";
 
-import { headers } from "next/headers";
-import { requestLoginLink } from "@/lib/server/admin/auth";
+import { cookies, headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { audit } from "@/lib/server/admin/audit";
+import {
+  ADMIN_NAME,
+  SESSION_COOKIE,
+  sessionCookieOptions,
+  signInWithPassword,
+} from "@/lib/server/admin/auth";
+import { db } from "@/lib/server/db";
 import { clientIp } from "@/lib/server/http";
 
-export type LoginState =
-  | null
-  | { status: "invalid" }
-  | { status: "limited" }
-  /** The same answer for listed and unlisted addresses. */
-  | { status: "sent"; devLink?: string };
+export type LoginState = null | { status: "wrong" | "rate_limited" | "not_configured" };
 
-export async function requestLink(_prev: LoginState, formData: FormData): Promise<LoginState> {
-  const email = String(formData.get("email") ?? "").trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return { status: "invalid" };
-  const result = await requestLoginLink(email, clientIp(await headers()));
-  if (!result.ok) return { status: "limited" };
-  return { status: "sent", devLink: result.devLink };
+export async function signIn(_prev: LoginState, formData: FormData): Promise<LoginState> {
+  const password = String(formData.get("password") ?? "");
+  const result = await signInWithPassword(password, clientIp(await headers()));
+  if (!result.ok) return { status: result.reason };
+  (await cookies()).set(SESSION_COOKIE, result.session, sessionCookieOptions());
+  await audit(db(), ADMIN_NAME, "admin.login");
+  redirect("/admin");
 }

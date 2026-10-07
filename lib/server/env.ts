@@ -6,10 +6,6 @@
 import "server-only";
 import { z } from "zod";
 
-const flag = z
-  .enum(["0", "1", "true", "false", ""])
-  .optional()
-  .transform((v) => v === "1" || v === "true");
 const optional = z
   .string()
   .optional()
@@ -20,17 +16,12 @@ const schema = z.object({
   MONGODB_POOL_MAX: z.coerce.number().int().min(1).max(50).optional(),
   RUN_TOKEN_SECRET: z.string().min(32, "RUN_TOKEN_SECRET must be at least 32 characters"),
   TURNSTILE_SECRET: optional,
-  EMAIL_API_KEY: optional,
-  EMAIL_FROM: z.string().default("Boustan <onboarding@resend.dev>"),
-  EMAIL_REPLY_TO: optional,
-  EMAIL_SANDBOX: flag,
   UPSTASH_REDIS_REST_URL: optional,
   UPSTASH_REDIS_REST_TOKEN: optional,
   RATE_LIMITS: optional,
   CRON_SECRET: optional,
-  ADMIN_EMAILS: optional,
-  /** 1 = show the admin sign-in link on the login page instead of relying on email (dev, demos). */
-  ADMIN_DEV_LINK: flag,
+  /** The one password for /admin (ADM-01). Blank: nobody can sign in. */
+  ADMIN_PASSWORD: optional,
   SENTRY_DSN: optional,
   APP_URL: optional,
   VERCEL_ENV: optional,
@@ -46,10 +37,8 @@ export type Env = z.infer<typeof schema> & {
    * may skip Turnstile and cron auth when those secrets are blank.
    */
   production: boolean;
-  /** Absolute base URL for links in emails. */
+  /** Absolute base URL of this deployment (secure-cookie check, share links, social preview). */
   appUrl: string;
-  /** Lowercased ADMIN_EMAILS: the only people who can sign in to /admin (ADM-01). */
-  adminEmails: string[];
 };
 
 let cached: Env | null = null;
@@ -68,11 +57,7 @@ export function env(): Env {
     /\/$/,
     "",
   );
-  const adminEmails = (e.ADMIN_EMAILS ?? "")
-    .split(/[,;\s]+/)
-    .map((v) => v.trim().toLowerCase())
-    .filter((v) => v.includes("@"));
-  cached = { ...e, production, appUrl, adminEmails };
+  cached = { ...e, production, appUrl };
   return cached;
 }
 

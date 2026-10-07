@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 import {
-  adminLoginTokenSchema,
   adminSessionTokenSchema,
   emailKey,
   hashToken,
@@ -98,13 +97,11 @@ describe("one kind of token never passes as another (SEC-04, ADM-01)", () => {
   const payloads: Record<Exclude<TokenKind, "email_key">, object> = {
     run,
     save: { v: 1, run: run.id, exp: Date.now() + 60_000 },
-    admin_login: { v: 1, e: "admin@boustan.test", exp: Date.now() + 60_000 },
-    admin_session: { v: 1, e: "admin@boustan.test", exp: Date.now() + 60_000 },
+    admin_session: { v: 1, p: "stamp", exp: Date.now() + 60_000 },
   };
   const schemas: Record<keyof typeof payloads, z.ZodType> = {
     run: runTokenSchema,
     save: saveTokenSchema,
-    admin_login: adminLoginTokenSchema,
     admin_session: adminSessionTokenSchema,
   };
   const kinds = Object.keys(payloads) as (keyof typeof payloads)[];
@@ -123,13 +120,6 @@ describe("one kind of token never passes as another (SEC-04, ADM-01)", () => {
         }
       }
     }
-  });
-
-  it("keeps a sign-in link from working as a session cookie, though their payloads match", () => {
-    const login = signToken("admin_login", payloads.admin_login);
-    expect(verifyToken("admin_session", login, adminSessionTokenSchema)).toBeNull();
-    const session = signToken("admin_session", payloads.admin_session);
-    expect(verifyToken("admin_login", session, adminLoginTokenSchema)).toBeNull();
   });
 
   it("keeps a run token from being spent as a save token", () => {

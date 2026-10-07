@@ -11,6 +11,7 @@ import { defineConfig, devices } from "@playwright/test";
  * Turnstile uses Cloudflare's always-pass test keys, so the browser needs network access.
  */
 const PORT = 3300;
+export const ADMIN_PASSWORD = "e2e-admin-password";
 export const LIVE_MONGODB_URI =
   process.env.LIVE_MONGODB_URI ??
   "mongodb://127.0.0.1:27019/boustan_e2e?replicaSet=rs0&directConnection=true";
@@ -35,11 +36,7 @@ export default defineConfig({
       MONGODB_URI: process.env.LIVE_APP_MONGODB_URI ?? LIVE_MONGODB_URI,
       RUN_TOKEN_SECRET: "e2e-live-secret-e2e-live-secret-e2e-live-secret",
       APP_URL: `http://localhost:${PORT}`,
-      EMAIL_SANDBOX: "1",
-      EMAIL_API_KEY: "",
-      // The admin sign-in link is shown on the login page instead of being emailed.
-      ADMIN_EMAILS: "admin@e2e.test",
-      ADMIN_DEV_LINK: "1",
+      ADMIN_PASSWORD,
       TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
       NEXT_PUBLIC_TURNSTILE_SITE_KEY: "1x00000000000000000000BB",
       UPSTASH_REDIS_REST_URL: "",

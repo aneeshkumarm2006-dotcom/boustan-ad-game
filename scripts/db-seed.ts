@@ -303,7 +303,7 @@ async function addDemoPlayers(db: Db, count: number) {
   const top = await topEntries(db, WINNERS);
   console.log(`The top ${WINNERS} win:`);
   for (const e of top) console.log(`  ${e.rank}  ${e.name}  ${e.points} points`);
-  console.log("Open /admin (sign in with an address in ADMIN_EMAILS) and the leaderboard.");
+  console.log("Open /admin (sign in with ADMIN_PASSWORD) and the leaderboard.");
 }
 
 async function main() {
