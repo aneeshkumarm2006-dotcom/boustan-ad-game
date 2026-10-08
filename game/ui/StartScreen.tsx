@@ -43,7 +43,7 @@ function ScoringPanel() {
   );
 }
 
-/** Start screen (§3.2): logo, title, how scoring works, PLAY, how to play, toggles, links. */
+/** Start screen (§3.2): logo, title, scoring, how to play, entry form, toggles, links. */
 export function StartScreen({
   campaign,
   starting,
@@ -71,8 +71,8 @@ export function StartScreen({
       </h1>
       <p className="lede">{t.t("start.lede")}</p>
       {message ? <p className="campaign-note">{message}</p> : <ScoringPanel />}
-      <EntryForm onSubmit={onPlay} disabled={starting} />
       <p className="small">{t.t("start.how")}</p>
+      <EntryForm onSubmit={onPlay} disabled={starting} />
       <div className="btn-stack">
         <button type="button" className="btn ghost" onClick={onLeaderboard}>
           {t.t("common.leaderboard")}
