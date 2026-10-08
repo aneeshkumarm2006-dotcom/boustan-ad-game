@@ -20,6 +20,7 @@ const schema = z.object({
   UPSTASH_REDIS_REST_TOKEN: optional,
   RATE_LIMITS: optional,
   CRON_SECRET: optional,
+  HUBSPOT_SIGNUP_WEBHOOK_URL: optional.pipe(z.url().startsWith("https://").optional()),
   /** The one password for /admin (ADM-01). Blank: nobody can sign in. */
   ADMIN_PASSWORD: optional,
   SENTRY_DSN: optional,

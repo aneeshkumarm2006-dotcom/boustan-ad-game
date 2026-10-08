@@ -146,7 +146,7 @@ export async function saveScore(
         tx,
         player._id,
         "contact_upsert",
-        { created: true },
+        { created: true, signupWebhook: true },
         `contact:${player._id}`,
       );
     }

@@ -3,6 +3,10 @@
   "regions": ["yul1"],
   "crons": [
     {
+      "path": "/api/cron/hubspot",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/cron/alerts",
       "schedule": "*/15 * * * *"
     },

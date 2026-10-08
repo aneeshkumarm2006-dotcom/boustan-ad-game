@@ -15,6 +15,7 @@ import {
   withErrors,
 } from "@/lib/server/http";
 import { log } from "@/lib/server/log";
+import { deliverHubspotSignups } from "@/lib/server/hubspot";
 import { rateLimit } from "@/lib/server/rate-limit";
 import { saveScore, type SaveError } from "@/lib/server/scores";
 import { verifyTurnstile } from "@/lib/server/turnstile";
@@ -60,6 +61,7 @@ export const POST = withErrors("register_player", async (request: Request) => {
   if (!result.ok) return apiError(ERROR_STATUS[result.error], result.error);
 
   const { response, optedIn } = result;
+  after(() => deliverHubspotSignups(db(), result.playerId).then(() => {}));
   after(async () => {
     if (optedIn) {
       await recordServerEvent(
