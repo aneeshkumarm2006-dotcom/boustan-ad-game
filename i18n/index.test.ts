@@ -22,7 +22,9 @@ describe("createTranslator", () => {
 
   it("looks up keys and fills placeholders", () => {
     expect(fr.t("start.play")).toBe("COURS, POULET, COURS");
-    expect(en.t("start.winners", { n: 3 })).toBe("THE TOP 3 ON THE LEADERBOARD WIN");
+    expect(en.t("start.winners", { n: 3 })).toBe(
+      "THE TOP 3 WINNERS ON THE LEADERBOARD GET BOUSTAN GIFT CARDS",
+    );
     expect(fr.t("campaign.notStarted", { date: "15 oct. 2026" })).toBe(
       "Le concours commence le 15 oct. 2026. Échauffez-vous!",
     );

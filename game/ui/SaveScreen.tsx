@@ -25,8 +25,8 @@ export type SaveErrorKey =
 
 export type SaveSubmit = (input: SaveInput) => Promise<SaveErrorKey | null>;
 
-/** Name and email score form displayed directly after a completed run. */
-export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: SaveSubmit }) {
+/** Player details collected before the first run. */
+export function EntryForm({ onSubmit, disabled }: { onSubmit: SaveSubmit; disabled: boolean }) {
   const { t, lang, emit } = useUi();
   useEffect(() => {
     emit({ type: "save_view" });
@@ -83,9 +83,9 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
   return (
     <section aria-labelledby={`${id}-title`} className="save-next">
       <h2 id={`${id}-title`} className="heading">
-        {t.t("save.title")}
+        {t.t("start.entryTitle")}
       </h2>
-      <p className="sub">{t.plural("save.lede", points, { points: t.num(points) })}</p>
+      <p className="sub">{t.t("start.entryHint")}</p>
       <form onSubmit={submit} noValidate>
         <div className="field">
           <label htmlFor={`${id}-email`}>{t.t("save.email")}</label>
@@ -96,10 +96,12 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
             inputMode="email"
             required
             value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              setErrors((v) => ({ ...v, email: false }));
+            }}
             aria-invalid={errors.email || undefined}
             aria-describedby={errors.email ? errorId("email") : `${id}-email-hint`}
-            data-autofocus
           />
           {errors.email ? (
             <p id={errorId("email")} className="error">
@@ -116,11 +118,14 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
           <input
             id={`${id}-nickname`}
             type="text"
-            autoComplete="name"
+            autoComplete="username"
             required
             maxLength={NAME_MAX}
             value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
+            onChange={(e) => {
+              setNickname(e.target.value);
+              setErrors((v) => ({ ...v, nickname: undefined }));
+            }}
             aria-invalid={errors.nickname ? true : undefined}
             aria-describedby={errors.nickname ? errorId("nickname") : `${id}-nickname-hint`}
           />
@@ -146,7 +151,10 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
             type="checkbox"
             required
             checked={termsAge}
-            onChange={(e) => setTermsAge(e.target.checked)}
+            onChange={(e) => {
+              setTermsAge(e.target.checked);
+              setErrors((v) => ({ ...v, terms: false }));
+            }}
             aria-invalid={errors.terms || undefined}
             aria-describedby={errors.terms ? errorId("terms") : undefined}
           />
@@ -163,8 +171,13 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
           <input type="checkbox" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} />
           <span>{t.t("consent.marketing")}</span>
         </label>
-        <button type="submit" className="btn primary big" data-testid="save" disabled={sending}>
-          {sending ? t.t("save.sending") : t.t("save.cta")}
+        <button
+          type="submit"
+          className="btn primary big"
+          data-testid="play"
+          disabled={sending || disabled}
+        >
+          {sending ? t.t("start.getReady") : t.t("start.play")}
         </button>
         <p className="privacy">
           <RichText
@@ -179,6 +192,48 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
         </p>
       )}
       {TURNSTILE_ENABLED && <div ref={turnstileBox} className="turnstile" />}
+    </section>
+  );
+}
+
+/** The score action uses a fresh challenge after the run, without asking for details again. */
+export function SaveScreen({
+  onSubmit,
+}: {
+  onSubmit: (token: string) => Promise<SaveErrorKey | null>;
+}) {
+  const { t, lang } = useUi();
+  const box = useRef<HTMLDivElement>(null);
+  const challenge = useTurnstile(box, lang);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<SaveErrorKey | null>(null);
+  return (
+    <section>
+      <button
+        className="btn primary big"
+        data-testid="save"
+        disabled={sending}
+        onClick={async () => {
+          if (sending) return;
+          setSending(true);
+          try {
+            setError(await onSubmit(await challenge.getToken()));
+          } catch {
+            setError("save.errors.network");
+          } finally {
+            challenge.reset();
+            setSending(false);
+          }
+        }}
+      >
+        {sending ? t.t("save.sending") : t.t("save.cta")}
+      </button>
+      {error && (
+        <p className="error" role="alert">
+          {t.t(error)}
+        </p>
+      )}
+      {TURNSTILE_ENABLED && <div ref={box} className="turnstile" />}
     </section>
   );
 }

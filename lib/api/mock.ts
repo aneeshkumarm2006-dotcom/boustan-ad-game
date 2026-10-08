@@ -165,6 +165,26 @@ export function createMockApi(search: string): GameApi {
   });
 
   return {
+    async registerPlayer(req) {
+      await wait();
+      if (has("offline")) throw new ApiError("network");
+      if (!looksLikeEmail(req.email) || !req.termsAge || !cleanNickname(req.nickname))
+        throw new ApiError("rejected");
+      const db = load();
+      const email = normalizeEmail(req.email);
+      const known = Object.entries(db.players).find(
+        ([, p]) => normalizeEmail(p.email) === email,
+      )?.[0];
+      const playerToken = known ?? randomId();
+      db.players[playerToken] ??= {
+        email,
+        nickname: cleanNickname(req.nickname)!,
+        best: null,
+        bestAt: Date.now(),
+      };
+      save(db);
+      return { playerToken, rank: null, best: db.players[playerToken].best };
+    },
     async startRun(): Promise<StartRunResponse> {
       await wait();
       if (has("offline")) throw new ApiError("network");

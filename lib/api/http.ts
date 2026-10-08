@@ -51,6 +51,11 @@ async function call<T>(
 
 export function createHttpApi(): GameApi {
   return {
+    registerPlayer: (req) =>
+      call<SaveScoreResponse>("/api/players/register", {
+        method: "POST",
+        body: JSON.stringify(req),
+      }),
     startRun: (req: StartRunRequest) =>
       call<StartRunResponse>("/api/runs/start", { method: "POST", body: JSON.stringify(req) }),
     finishRun: (runId: string, req: FinishRunRequest, playerToken?: string) =>

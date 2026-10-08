@@ -126,6 +126,7 @@ export class ApiError extends Error {
 }
 
 export interface GameApi {
+  registerPlayer(req: Omit<SaveScoreRequest, "saveToken">): Promise<SaveScoreResponse>;
   startRun(req: StartRunRequest): Promise<StartRunResponse>;
   finishRun(runId: string, req: FinishRunRequest, playerToken?: string): Promise<FinishRunResponse>;
   saveScore(req: SaveScoreRequest): Promise<SaveScoreResponse>;

@@ -580,3 +580,45 @@ describe("POST /api/score: nicknames (LB-05)", () => {
     ]);
   });
 });
+
+describe("entry before playing", () => {
+  it("registers one player per normalized email without saving a score", async () => {
+    const first = await saveScore(
+      db,
+      form("", "Entry.Player@gmail.com", { nickname: "Entry Player" }),
+      { ...ctx(), now: new Date() },
+      true,
+    );
+    const second = await saveScore(
+      db,
+      form("", "entryplayer+again@gmail.com", { nickname: "Entry Player" }),
+      { ...ctx(), now: new Date() },
+      true,
+    );
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(first.playerId).toBe(second.playerId);
+    expect(await db.players.countDocuments()).toBe(1);
+    expect(await db.bestRuns.countDocuments()).toBe(0);
+    expect(await db.runs.countDocuments()).toBe(0);
+    expect(first.response.best).toBeNull();
+    const finished = await finish(db, GOOD());
+    const saved = await save(db, finished, "entryplayer@gmail.com", { nickname: "Entry Player" });
+    expect(saved.playerId).toBe(first.playerId);
+    expect(await db.players.countDocuments()).toBe(1);
+    expect(await db.bestRuns.countDocuments()).toBe(1);
+  });
+  it("rejects registration without a username or consent", async () => {
+    for (const extra of [{ nickname: "" }, { nickname: "Entry Player", termsAge: false }]) {
+      const result = await saveScore(
+        db,
+        form("", "entry@gmail.com", extra),
+        { ...ctx(), now: new Date() },
+        true,
+      );
+      expect(result).toEqual({ ok: false, error: "rejected" });
+    }
+    expect(await db.players.countDocuments()).toBe(0);
+  });
+});

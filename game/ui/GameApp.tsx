@@ -44,7 +44,7 @@ import { LeaderboardScreen } from "./LeaderboardScreen";
 import { BrandLogo, Overlay, PauseIcon, PixelIcon, SparkIcon, Tools } from "./parts";
 import { ResultsScreen, type FinishState } from "./ResultsScreen";
 import { SavedScreen } from "./SavedScreen";
-import { type SaveErrorKey, type SaveSubmit } from "./SaveScreen";
+import { type SaveErrorKey, type SaveSubmit, type SaveInput } from "./SaveScreen";
 import { shareOrCopy } from "./share";
 import { StartScreen } from "./StartScreen";
 
@@ -253,7 +253,10 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
     return withTimeout(retry, RUN_START_WAIT_MS);
   }, [boot, lang]);
 
+  const entryRef = useRef<SaveInput | null>(null);
+
   const play = useCallback(async () => {
+    if (!entryRef.current) return;
     const game = gameRef.current;
     if (!game || startingRef.current) return;
     startingRef.current = true;
@@ -289,7 +292,7 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
             hits: res.hits,
             activeMs: res.activeMs,
           },
-          loadPlayer()?.token,
+          undefined,
         );
         setFinish({ status: "done", res: out });
         if (!out.valid) return;
@@ -619,7 +622,30 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
           <StartScreen
             campaign={campaign}
             starting={starting || !engineReady}
-            onPlay={() => void play()}
+            onPlay={async (input) => {
+              try {
+                const res = await boot.api.registerPlayer({
+                  ...input,
+                  lang,
+                  src: boot.params.src,
+                  utm: boot.params.utm,
+                });
+                entryRef.current = input;
+                const me = { token: res.playerToken };
+                savePlayer(me);
+                setPlayer(me);
+                await play();
+                return null;
+              } catch (error) {
+                if (error instanceof ApiError && error.code === "bad_email")
+                  return "save.errors.badEmail";
+                if (error instanceof ApiError && error.code === "rate_limited")
+                  return "save.errors.tooMany";
+                if (error instanceof ApiError && error.code === "rejected")
+                  return "save.errors.rejected";
+                return "save.errors.network";
+              }
+            }}
             onLeaderboard={() => showBoard("start")}
           />
         );
@@ -633,7 +659,11 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
             best={best}
             newBest={newBest}
             preview={preview}
-            onSubmit={submitSave}
+            onSubmit={(turnstileToken) =>
+              entryRef.current
+                ? submitSave({ ...entryRef.current, turnstileToken })
+                : Promise.resolve("save.errors.rejected")
+            }
             onRetryFinish={() => runRef.current && void submitFinish(runRef.current, result)}
             onPlayAgain={() => void play()}
             onShare={() => void share()}

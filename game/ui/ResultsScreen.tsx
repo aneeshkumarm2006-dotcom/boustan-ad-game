@@ -5,7 +5,7 @@ import type { CampaignState, FinishRunResponse, LeaderboardResponse } from "@/li
 import type { RunResult } from "../engine";
 import { useUi } from "./context";
 import { BoardTable, BrandLogo, Overlay, Tools } from "./parts";
-import { SaveScreen, type SaveSubmit } from "./SaveScreen";
+import { SaveScreen, type SaveErrorKey } from "./SaveScreen";
 import { campaignMessage } from "./StartScreen";
 
 export type FinishState =
@@ -35,7 +35,7 @@ export function ResultsScreen({
   newBest: boolean;
   /** The top of the board, fetched after a valid run. */
   preview: LeaderboardResponse | null;
-  onSubmit: SaveSubmit;
+  onSubmit: (token: string) => Promise<SaveErrorKey | null>;
   onRetryFinish: () => void;
   onPlayAgain: () => void;
   onShare: () => void;
@@ -92,7 +92,7 @@ export function ResultsScreen({
           {t.plural("results.hits", result.hits, { n: t.num(result.hits) })}
         </p>
       </div>
-      {canSave && <SaveScreen points={res.points} onSubmit={onSubmit} />}
+      {canSave && <SaveScreen onSubmit={onSubmit} />}
       {newBest && <p className="badge">{t.t("results.newBest")}</p>}
       {best && !newBest && (
         <p className="small">

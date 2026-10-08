@@ -3,6 +3,7 @@
 import { POINTS_PER_GARLIC, POINTS_PER_METRE, WINNERS } from "@/game-core";
 import type { Translator } from "@/i18n";
 import type { CampaignState } from "@/lib/api";
+import { EntryForm, type SaveSubmit } from "./SaveScreen";
 import { useUi } from "./context";
 import { BrandLogo, Overlay, PixelIcon, Tools } from "./parts";
 
@@ -51,7 +52,7 @@ export function StartScreen({
 }: {
   campaign: CampaignState | null;
   starting: boolean;
-  onPlay: () => void;
+  onPlay: SaveSubmit;
   onLeaderboard: () => void;
 }) {
   const { t } = useUi();
@@ -63,23 +64,14 @@ export function StartScreen({
         <Tools />
       </div>
       <p className="kicker">{t.t("start.kicker")}</p>
-      <h1 id="start-title" className="title">
+      <h1 id="start-title" className="title" tabIndex={-1} data-autofocus>
         {t.t("brand.titleTop")}
         <br />
         {t.t("brand.titleBottom")}
       </h1>
       <p className="lede">{t.t("start.lede")}</p>
       {message ? <p className="campaign-note">{message}</p> : <ScoringPanel />}
-      <button
-        type="button"
-        className="btn primary big"
-        onClick={onPlay}
-        disabled={starting}
-        data-autofocus
-        data-testid="play"
-      >
-        {starting ? t.t("start.getReady") : t.t("start.play")}
-      </button>
+      <EntryForm onSubmit={onPlay} disabled={starting} />
       <p className="small">{t.t("start.how")}</p>
       <div className="btn-stack">
         <button type="button" className="btn ghost" onClick={onLeaderboard}>

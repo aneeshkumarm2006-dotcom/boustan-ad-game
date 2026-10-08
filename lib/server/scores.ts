@@ -58,27 +58,33 @@ export type SaveResult = SaveSuccess | { ok: false; error: SaveError };
 
 const fail = (error: SaveError): SaveResult => ({ ok: false, error });
 
-export async function saveScore(q: Db, input: SaveInput, ctx: SaveContext): Promise<SaveResult> {
+export async function saveScore(
+  q: Db,
+  input: SaveInput,
+  ctx: SaveContext,
+  register = false,
+): Promise<SaveResult> {
   const { now } = ctx;
   const token = verifyToken("save", input.saveToken, saveTokenSchema);
-  if (!token) return fail("rejected");
-  if (token.exp < now.getTime()) return fail("expired");
+  if (!register && !token) return fail("rejected");
+  if (token && token.exp < now.getTime()) return fail("expired");
 
   const typed = checkEmail(input.email);
   if (!typed.ok) return fail(typed.reason === "disposable" ? "bad_email" : "rejected");
+  if (register && !cleanNickname(input.nickname)) return fail("rejected");
   if (!input.termsAge) return fail("rejected");
 
   return q.transaction(async (tx): Promise<SaveResult> => {
-    const run = await tx.runs.findOne({ _id: token.run });
-    if (!run || run.status !== "valid") return fail("rejected");
+    const run = token ? await tx.runs.findOne({ _id: token.run }) : null;
+    if (!register && (!run || run.status !== "valid")) return fail("rejected");
 
     // Read fresh, so switching the leaderboard off stops saves at once.
-    if (!boardOpen(await loadCampaign(tx), now)) return fail("closed");
+    if (!register && !boardOpen(await loadCampaign(tx), now)) return fail("closed");
 
     // A spent token from the same player is a retry after a lost response: answer the same.
     // Anyone else is refused here, before a player row is written for them: a refusal commits
     // the transaction, so a player created first would stay behind with no consent record.
-    if (run.savedAt) {
+    if (run?.savedAt) {
       const owner = await tx.players.findOne({ emailNormalized: typed.normalized });
       if (!owner || run.playerId !== owner._id) return fail("expired");
       return {
@@ -122,7 +128,7 @@ export async function saveScore(q: Db, input: SaveInput, ctx: SaveContext): Prom
       source: "save_form" as const,
       ip: ctx.ip,
       userAgent: ctx.userAgent,
-      hostOrigin: run.hostOrigin,
+      hostOrigin: run?.hostOrigin ?? null,
     };
     await recordConsent(tx, { ...consentBase, kind: "terms_age" });
     if (optedIn) {
@@ -146,15 +152,16 @@ export async function saveScore(q: Db, input: SaveInput, ctx: SaveContext): Prom
     }
 
     // ---------- the run: spend its token, keep it as the best if it is ----------
-    await tx.runs.updateOne({ _id: run._id }, { $set: { playerId: player._id, savedAt: now } });
-    await updateBestRun(tx, player._id, {
-      runId: run._id,
-      points: run.points,
-      distanceM: run.distanceM,
-      garlic: run.garlic,
-      at: run.finishedAt,
-    });
-
+    if (run) {
+      await tx.runs.updateOne({ _id: run._id }, { $set: { playerId: player._id, savedAt: now } });
+      await updateBestRun(tx, player._id, {
+        runId: run._id,
+        points: run.points,
+        distanceM: run.distanceM,
+        garlic: run.garlic,
+        at: run.finishedAt,
+      });
+    }
     return {
       ok: true,
       response: {
@@ -173,7 +180,7 @@ async function lockOrCreatePlayer(
   tx: Tx,
   typed: { email: string; normalized: string },
   input: SaveInput,
-  run: RunDoc,
+  run: RunDoc | null,
   now: Date,
 ): Promise<{ player: Player | null; created: boolean }> {
   const existing = await tx.players.findOne({ emailNormalized: typed.normalized });
@@ -185,9 +192,9 @@ async function lockOrCreatePlayer(
     language: input.lang,
     ageConfirmedAt: now,
     marketingOptIn: false,
-    firstSrc: run.src ?? input.src,
-    firstHost: run.hostOrigin,
-    utm: Object.keys(run.utm).length > 0 ? run.utm : input.utm,
+    firstSrc: run?.src ?? input.src,
+    firstHost: run?.hostOrigin ?? null,
+    utm: run && Object.keys(run.utm).length > 0 ? run.utm : input.utm,
     createdAt: now,
     lastSeenAt: now,
   });
