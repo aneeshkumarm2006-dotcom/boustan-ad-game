@@ -122,22 +122,22 @@
   "save": {
     "title": "Enregistrez vos points",
     "lede": {
-      "one": "Entrez votre courriel pour enregistrer votre {points} point. Rejouez ensuite pour battre votre record.",
-      "other": "Entrez votre courriel pour enregistrer vos {points} points. Rejouez ensuite pour battre votre record."
+      "one": "Entrez votre nom et votre courriel pour enregistrer votre {points} point. Rejouez ensuite pour battre votre record.",
+      "other": "Entrez votre nom et votre courriel pour enregistrer vos {points} points. Rejouez ensuite pour battre votre record."
     },
     "cta": "ENREGISTRER MES POINTS",
     "email": "Votre courriel",
-    "emailHint": "Votre courriel reste privé. Un pseudo est créé pour le classement. Nous vous écrirons si vous gagnez.",
-    "nickname": "Surnom (facultatif)",
-    "nicknameHint": "De 2 à 16 caractères. Affiché au classement. Sans surnom, on vous en donne un.",
-    "reroll": "Autre nom",
+    "emailHint": "Votre courriel reste privé. Nous vous écrirons si vous gagnez.",
+    "nickname": "Nom complet",
+    "nicknameHint": "Affiché au classement.",
     "privacy": "Boustan utilise votre courriel pour inscrire vos points au classement et pour vous joindre si vous gagnez. Vous recevez des offres seulement si vous y consentez. Vos données peuvent être traitées à l'extérieur du Québec. Elles sont supprimées 90 jours après le concours, sauf si vous gagnez ou acceptez de recevoir nos offres. <policy>Politique de confidentialité</policy> · <officer>Responsable de la protection des renseignements personnels</officer>",
     "sending": "ENREGISTREMENT…",
     "errors": {
       "email": "Entrez une adresse courriel valide.",
       "terms": "Confirmez que vous avez 14 ans ou plus et que vous acceptez le règlement du concours.",
-      "nickname": "De 2 à 16 lettres, chiffres, espaces ou - _ . '",
-      "nicknameRude": "Choisissez un autre surnom. Celui-ci ne peut pas figurer au classement.",
+      "nickname": "De 2 à 40 lettres, espaces ou - . '",
+      "nicknameMissing": "Entrez votre nom complet.",
+      "nicknameRude": "Ce nom ne peut pas figurer au classement. Entrez votre vrai nom.",
       "network": "Un problème est survenu. Vos points ne sont pas perdus : réessayez.",
       "expired": "Ces points ne peuvent plus être enregistrés. On peut enregistrer ses points jusqu'à 30 minutes après la course.",
       "rejected": "Nous n'avons pas pu traiter cette demande.",

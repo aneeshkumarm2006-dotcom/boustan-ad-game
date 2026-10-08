@@ -53,6 +53,7 @@ test("a real run is scored on the server, saved to the leaderboard, and a known 
   // A new player saves the score with an email; it goes on the leaderboard (AC-02, LB-02).
   const email = `E2E.Player+${started}@example.com`;
   await page.getByLabel("Your email").fill(email);
+  await page.getByLabel("Full name").fill("E2E Runner");
   await page.getByLabel(/I'm 14 or older/).check();
   await page.getByLabel(/Send me Boustan offers/).check();
   await page.getByRole("button", { name: "SAVE MY SCORE" }).click();
@@ -65,7 +66,7 @@ test("a real run is scored on the server, saved to the leaderboard, and a known 
   const player = (await db.players.findOne({ email }))!;
   expect(player).toMatchObject({
     emailNormalized: "e2e.player@example.com",
-    nickname: expect.any(String),
+    nickname: "E2E Runner",
     marketingOptIn: true,
     hidden: false,
     firstSrc: "e2e-live",

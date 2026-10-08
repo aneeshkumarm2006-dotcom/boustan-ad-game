@@ -64,10 +64,11 @@ test("full run in French: live points, the results math, then save (AC-01, AC-02
   await expect(page.getByRole("heading", { name: "Enregistrez vos points" })).toBeVisible();
   await expect(
     page.getByText(
-      `Entrez votre courriel pour enregistrer vos ${run.points} points. Rejouez ensuite pour battre votre record.`,
+      `Entrez votre nom et votre courriel pour enregistrer vos ${run.points} points. Rejouez ensuite pour battre votre record.`,
     ),
   ).toBeVisible();
   await page.getByLabel("Votre courriel").fill("alex.tremblay+jeu@gmail.com");
+  await page.getByLabel("Nom complet").fill("Alex Tremblay");
   await page.getByLabel(/J'ai 14 ans ou plus/).check();
   await expect(page.getByLabel(/Envoyez-moi les offres/)).not.toBeChecked();
   await page.getByRole("button", { name: "ENREGISTRER MES POINTS" }).click();
@@ -133,7 +134,7 @@ test("once the contest has ended, the board shows the final top 3", async ({ pag
   await expect(page.locator(".board tbody tr .tag")).toHaveCount(3);
 });
 
-test("the game-over form saves with only email and consent, using a private generated nickname", async ({
+test("the game-over form requires name, email and consent and displays the name", async ({
   page,
 }) => {
   await page.goto("/?lang=en");
@@ -153,15 +154,18 @@ test("the game-over form saves with only email and consent, using a private gene
 
   await page.getByLabel("Your email").fill("sam.roy@gmail.com");
   await page.getByLabel(/I'm 14 or older/).check();
-  await expect(page.getByLabel("Full name")).toHaveCount(0);
+  await submit.click();
+  await expect(page.getByText("Enter your full name.")).toBeVisible();
+  await expect(page.getByLabel("Full name")).toBeFocused();
+  await page.getByLabel("Full name").fill("Sam Roy");
 
   await submit.click();
   await advance(page, 500);
   await expect(page.getByRole("heading", { name: "You're on the leaderboard" })).toBeVisible();
-  // The board shows a generated nickname, never the email.
+  // The board shows the submitted name, never the email.
   await page.getByRole("button", { name: "LEADERBOARD" }).click();
   await advance(page, 300);
-  await expect(page.locator(".board tr.me")).toContainText("YOU ·");
+  await expect(page.locator(".board tr.me")).toContainText("YOU · Sam Roy");
   await expect(page.locator(".board")).not.toContainText("@");
 });
 
@@ -286,6 +290,7 @@ test("a failed save keeps the form values and can be retried (§3.4)", async ({ 
   await scoreAndDie(page);
   await page.getByRole("button", { name: "SAVE MY SCORE" }).click();
   await page.getByLabel("Your email").fill("retry@example.com");
+  await page.getByLabel("Full name").fill("Retry Fan");
   await page.getByLabel(/I'm 14 or older/).check();
   await page.getByRole("button", { name: "SAVE MY SCORE" }).click();
   await advance(page, 500);
@@ -293,6 +298,7 @@ test("a failed save keeps the form values and can be retried (§3.4)", async ({ 
     "Something went wrong. Your score is safe, so try again.",
   );
   await expect(page.getByLabel("Your email")).toHaveValue("retry@example.com");
+  await expect(page.getByLabel("Full name")).toHaveValue("Retry Fan");
   await page.getByRole("button", { name: "SAVE MY SCORE" }).click();
   await advance(page, 500);
   await expect(page.getByRole("heading", { name: "You're on the leaderboard" })).toBeVisible();

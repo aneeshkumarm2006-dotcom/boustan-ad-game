@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { looksLikeEmail } from "@/lib/email";
+import { NAME_MAX, looksLikeEmail } from "@/lib/email";
+import { nicknameProblem, type NicknameProblem } from "@/lib/nicknames";
 import { useUi } from "./context";
 import { RichText } from "./parts";
 import { TURNSTILE_ENABLED, useTurnstile } from "./turnstile";
 
 export interface SaveInput {
   email: string;
+  nickname: string;
   termsAge: boolean;
   marketingOptIn: boolean;
   turnstileToken: string;
@@ -23,7 +25,7 @@ export type SaveErrorKey =
 
 export type SaveSubmit = (input: SaveInput) => Promise<SaveErrorKey | null>;
 
-/** Email-only score form displayed directly after a completed run. */
+/** Name and email score form displayed directly after a completed run. */
 export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: SaveSubmit }) {
   const { t, lang, emit } = useUi();
   useEffect(() => {
@@ -34,10 +36,12 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
   const turnstileBox = useRef<HTMLDivElement>(null);
   const turnstile = useTurnstile(turnstileBox, lang);
   const [email, setEmail] = useState("");
+  const [nickname, setNickname] = useState("");
   const [termsAge, setTermsAge] = useState(false);
   const [optIn, setOptIn] = useState(false);
   const [errors, setErrors] = useState<{
     email?: boolean;
+    nickname?: NicknameProblem;
     terms?: boolean;
   }>({});
   const [failure, setFailure] = useState<string | null>(null);
@@ -58,16 +62,18 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
     if (sending) return;
     const next = {
       email: !looksLikeEmail(email),
+      nickname: nicknameProblem(nickname) ?? undefined,
       terms: !termsAge,
     };
     setErrors(next);
-    if (next.email || next.terms) {
-      const first = next.email ? "email" : "terms";
+    if (next.email || next.nickname || next.terms) {
+      const first = next.email ? "email" : next.nickname ? "nickname" : "terms";
       document.getElementById(`${id}-${first}`)?.focus();
       return;
     }
     void send({
       email: email.trim(),
+      nickname: nickname.trim(),
       termsAge,
       marketingOptIn: optIn,
     });
@@ -102,6 +108,35 @@ export function SaveScreen({ points, onSubmit }: { points: number; onSubmit: Sav
           ) : (
             <p id={`${id}-email-hint`} className="small">
               {t.t("save.emailHint")}
+            </p>
+          )}
+        </div>
+        <div className="field">
+          <label htmlFor={`${id}-nickname`}>{t.t("save.nickname")}</label>
+          <input
+            id={`${id}-nickname`}
+            type="text"
+            autoComplete="name"
+            required
+            maxLength={NAME_MAX}
+            value={nickname}
+            onChange={(e) => setNickname(e.target.value)}
+            aria-invalid={errors.nickname ? true : undefined}
+            aria-describedby={errors.nickname ? errorId("nickname") : `${id}-nickname-hint`}
+          />
+          {errors.nickname ? (
+            <p id={errorId("nickname")} className="error">
+              {t.t(
+                errors.nickname === "missing"
+                  ? "save.errors.nicknameMissing"
+                  : errors.nickname === "rude"
+                    ? "save.errors.nicknameRude"
+                    : "save.errors.nickname",
+              )}
+            </p>
+          ) : (
+            <p id={`${id}-nickname-hint`} className="small">
+              {t.t("save.nicknameHint")}
             </p>
           )}
         </div>

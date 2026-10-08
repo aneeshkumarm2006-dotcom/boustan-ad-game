@@ -30,8 +30,11 @@ export function normalizeEmail(email: string): string {
   return `${local}@${domain}`;
 }
 
-/** Leaderboard nickname rules (LB-05): 2–16 letters (accents allowed), digits, spaces, -_.' */
+/** Longest full name the save form accepts (LB-05). */
+export const NAME_MAX = 40;
+
+/** Leaderboard name rules (LB-05): the player's full name, 2–40 letters (accents allowed), digits, spaces, -_.' */
 export function isValidNickname(value: string): boolean {
   const v = value.trim();
-  return /^[\p{L}\p{N} _.'’-]{2,16}$/u.test(v);
+  return /^[\p{L}\p{N} _.'’-]{2,40}$/u.test(v);
 }

@@ -36,7 +36,7 @@ export const MOODS = [
   "Fusée",
 ];
 
-/** Longest nickname the save form accepts (LB-05); auto names stay inside it so a reroll is always valid. */
+/** Longest food name the server gives a player saved without a usable name (LB-05). */
 export const NICKNAME_MAX = 16;
 
 export function autoNickname(random: () => number = Math.random): string {
@@ -48,12 +48,12 @@ export function autoNickname(random: () => number = Math.random): string {
   return `Toum Flash ${1 + Math.floor(random() * 99)}`;
 }
 
-export type NicknameProblem = "format" | "rude";
+export type NicknameProblem = "missing" | "format" | "rude";
 
-/** Why a typed nickname can't be used, or null when it can (LB-05). Blank is fine: it gets a food name. */
+/** Why a typed nickname can't be used, or null when it can (LB-05). The save form requires one. */
 export function nicknameProblem(input: string): NicknameProblem | null {
   const value = input.normalize("NFC").trim().replace(/\s+/g, " ");
-  if (value === "") return null;
+  if (value === "") return "missing";
   if (!isValidNickname(value)) return "format";
   return isProfane(value) ? "rude" : null;
 }

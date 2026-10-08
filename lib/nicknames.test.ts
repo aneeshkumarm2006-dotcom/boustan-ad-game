@@ -62,17 +62,17 @@ describe("profanity filter (LB-05)", () => {
 });
 
 describe("nicknames", () => {
-  it("accepts 2 to 16 characters with accents, digits, spaces and - _ . '", () => {
+  it("accepts 2 to 40 characters with accents, digits, spaces and - _ . '", () => {
     expect(cleanNickname("  Éloïse   d'Or  ")).toBe("Éloïse d'Or");
     expect(cleanNickname("a")).toBeNull();
-    expect(cleanNickname("x".repeat(17))).toBeNull();
+    expect(cleanNickname("x".repeat(41))).toBeNull();
     expect(cleanNickname("emoji 🎮")).toBeNull();
     expect(cleanNickname("<b>hi</b>")).toBeNull();
   });
 
-  it("tells format problems from rude ones, and allows blank", () => {
-    expect(nicknameProblem("")).toBeNull();
-    expect(nicknameProblem("   ")).toBeNull();
+  it("tells missing names, format problems and rude names apart", () => {
+    expect(nicknameProblem("")).toBe("missing");
+    expect(nicknameProblem("   ")).toBe("missing");
     expect(nicknameProblem("ok name")).toBeNull();
     expect(nicknameProblem("a")).toBe("format");
     expect(nicknameProblem("tabarnak")).toBe("rude");

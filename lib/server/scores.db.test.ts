@@ -552,7 +552,7 @@ describe("POST /api/score: nicknames (LB-05)", () => {
   });
 
   it("gives a food name when the nickname is blank, too short, malformed or rude", async () => {
-    const typed = [undefined, "", "   ", "a", "x".repeat(17), "<b>hi</b>", "emoji 🎮", "Merde 42"];
+    const typed = [undefined, "", "   ", "a", "x".repeat(41), "<b>hi</b>", "emoji 🎮", "Merde 42"];
     for (const [i, nickname] of typed.entries()) {
       await save(db, await finish(db, SHORT(i + 1)), `blank${i}@x.ca`, { nickname });
       const given = (await nicknameOf(`blank${i}@x.ca`))!;

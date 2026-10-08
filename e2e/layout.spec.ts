@@ -55,6 +55,9 @@ for (const lang of ["fr", "en"]) {
 
     await noHorizontalOverflow(page, "save");
     await page.locator('.card input[type="email"]').fill("long.name.for.layout@example.com");
+    await page
+      .locator('.card input[autocomplete="name"]')
+      .fill("Maximiliano Alessandro Bartholomew");
     await page.locator('.card input[type="checkbox"]').first().check();
     await page.locator('.card button[type="submit"]').click();
     await advance(page, 500);

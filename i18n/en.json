@@ -122,22 +122,22 @@
   "save": {
     "title": "Save your score",
     "lede": {
-      "one": "Enter your email to save your {points} point. Then play again to beat your best.",
-      "other": "Enter your email to save your {points} points. Then play again to beat your best."
+      "one": "Enter your name and email to save your {points} point. Then play again to beat your best.",
+      "other": "Enter your name and email to save your {points} points. Then play again to beat your best."
     },
     "cta": "SAVE MY SCORE",
     "email": "Your email",
-    "emailHint": "Your email stays private. A player nickname is created for the leaderboard. We’ll email you if you win.",
-    "nickname": "Nickname (optional)",
-    "nicknameHint": "2–16 characters. Shown on the leaderboard. Blank gets you a food name.",
-    "reroll": "New name",
+    "emailHint": "Your email stays private. We’ll email you if you win.",
+    "nickname": "Full name",
+    "nicknameHint": "Shown on the leaderboard.",
     "privacy": "Boustan uses your email to put your score on the leaderboard and to reach you if you win. You get offers only if you opt in. Your data may be processed outside Quebec. It is deleted 90 days after the contest unless you opt in or you win. <policy>Privacy policy</policy> · <officer>Privacy officer</officer>",
     "sending": "SAVING…",
     "errors": {
       "email": "Enter a valid email address.",
       "terms": "Confirm you're 14 or older and accept the contest rules.",
-      "nickname": "Use 2–16 letters, numbers, spaces or - _ . '",
-      "nicknameRude": "Pick a different nickname. This one can't go on the leaderboard.",
+      "nickname": "Use 2–40 letters, spaces or - . '",
+      "nicknameMissing": "Enter your full name.",
+      "nicknameRude": "This name can't go on the leaderboard. Enter your real name.",
       "network": "Something went wrong. Your score is safe, so try again.",
       "expired": "This score can no longer be saved. Scores can be saved for 30 minutes after a run.",
       "rejected": "We couldn't process this request.",

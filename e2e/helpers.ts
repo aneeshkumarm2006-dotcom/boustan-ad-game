@@ -102,9 +102,10 @@ export async function die(page: Page, target: Target = page): Promise<void> {
   await advance(page, 500);
 }
 
-/** From the results screen: fills in the inline email form and the 14+ box, then saves. */
+/** From the results screen: fills in the inline name and email form and the 14+ box, then saves. */
 export async function saveScore(page: Page, target: Target, email: string): Promise<void> {
   await target.locator('.card input[type="email"]').fill(email);
+  await target.locator('.card input[autocomplete="name"]').fill("Test Player");
   await target.locator('.card input[type="checkbox"]').first().check();
   await target.locator('.card button[type="submit"]').click();
   await advance(page, 500);

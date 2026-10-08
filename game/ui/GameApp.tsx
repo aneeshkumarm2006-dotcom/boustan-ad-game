@@ -527,6 +527,7 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
       const res = await boot.api.saveScore({
         saveToken: saveCtx.token,
         email: input.email,
+        nickname: input.nickname,
         lang,
         termsAge: input.termsAge,
         marketingOptIn: input.marketingOptIn,
