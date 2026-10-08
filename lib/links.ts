@@ -2,24 +2,30 @@
  * Outbound links (PRD EMB-09) and the share link (GAME-16). Every outbound link opens in a new
  * tab with rel="noopener" and the standard UTMs.
  *
- * The URLs below are placeholders until Boustan confirms them [Boustan][Legal].
+ * Destinations supplied by Boustan; shared by both language versions.
  */
 import type { Lang } from "@/i18n";
 
 export const CAMPAIGN_ID = process.env.NEXT_PUBLIC_CAMPAIGN_ID || "game-2026";
 
 const URLS = {
-  /** uEat ordering. */
-  orderOnline: { fr: "https://www.boustan.ca/fr", en: "https://www.boustan.ca/" },
+  /** Online ordering, without browser-specific tracking parameters. */
+  orderOnline: { fr: "https://boustan.order-online.ai/", en: "https://boustan.order-online.ai/" },
   /** Store locator. */
   findBoustan: {
-    fr: "https://www.boustan.ca/fr/locations",
+    fr: "https://www.boustan.ca/locations",
     en: "https://www.boustan.ca/locations",
   },
   /** Contest rules, privacy policy and privacy officer contact. */
-  terms: { fr: "https://www.boustan.ca/fr", en: "https://www.boustan.ca/" },
-  privacy: { fr: "https://www.boustan.ca/fr", en: "https://www.boustan.ca/" },
-  privacyOfficer: { fr: "https://www.boustan.ca/fr", en: "https://www.boustan.ca/" },
+  terms: {
+    fr: "https://www.boustan.ca/terms-and-conditions",
+    en: "https://www.boustan.ca/terms-and-conditions",
+  },
+  privacy: {
+    fr: "https://www.boustan.ca/privacy-policy",
+    en: "https://www.boustan.ca/privacy-policy",
+  },
+  privacyOfficer: { fr: "http://boustan.ca", en: "http://boustan.ca" },
 } as const;
 
 export type LinkTarget = keyof typeof URLS;
