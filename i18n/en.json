@@ -122,12 +122,12 @@
   "save": {
     "title": "Save your score",
     "lede": {
-      "one": "Put your {points} point on the leaderboard.",
-      "other": "Put your {points} points on the leaderboard."
+      "one": "Enter your email to save your {points} point. Then play again to beat your best.",
+      "other": "Enter your email to save your {points} points. Then play again to beat your best."
     },
     "cta": "SAVE MY SCORE",
     "email": "Your email",
-    "emailHint": "Never shown on the leaderboard. We use it to reach you if you win.",
+    "emailHint": "Your email stays private. A player nickname is created for the leaderboard. We’ll email you if you win.",
     "nickname": "Nickname (optional)",
     "nicknameHint": "2–16 characters. Shown on the leaderboard. Blank gets you a food name.",
     "reroll": "New name",

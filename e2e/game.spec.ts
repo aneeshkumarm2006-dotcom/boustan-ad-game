@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import {
+  type Stc,
   advance,
   cheat,
   die,
@@ -29,12 +30,17 @@ test("full run in French: live points, the results math, then save (AC-01, AC-02
   // The HUD counts 1 point per whole metre plus 10 per garlic as the run goes.
   await cheat(page, { invincible: true, magnet: true });
   await simulate(page, page, 21.5);
-  const snap = await snapshot(page);
+  // Read the running game and its HUD in the same browser tick.
+  const { snap, pointsText, garlicText } = await page.evaluate(() => ({
+    snap: (window as unknown as { __stc: Stc }).__stc.snapshot(),
+    pointsText: document.querySelector('[data-testid="hud-points"]')?.textContent,
+    garlicText: document.querySelector('[data-testid="hud-garlic"]')?.textContent,
+  }));
   expect(snap.state).toBe("play");
   expect(snap.garlic).toBeGreaterThan(0);
   expect(snap.points).toBe(Math.floor(snap.distanceM) + 10 * snap.garlic);
-  await expect(page.getByTestId("hud-points")).toHaveText(String(snap.points));
-  await expect(page.getByTestId("hud-garlic")).toHaveText(String(snap.garlic));
+  expect(pointsText).toBe(String(snap.points));
+  expect(garlicText).toBe(String(snap.garlic));
 
   await die(page);
   await expect(page.getByRole("heading", { name: "Repose en pita" })).toBeVisible();
@@ -55,9 +61,12 @@ test("full run in French: live points, the results math, then save (AC-01, AC-02
   await expect(page.locator(".preview tbody tr")).toHaveCount(3);
   await expect(page.locator(".preview .tag")).toHaveText(["GAGNANT", "GAGNANT", "GAGNANT"]);
 
-  await page.getByRole("button", { name: "ENREGISTRER MES POINTS" }).click();
   await expect(page.getByRole("heading", { name: "Enregistrez vos points" })).toBeVisible();
-  await expect(page.getByText(`Inscrivez vos ${run.points} points au classement.`)).toBeVisible();
+  await expect(
+    page.getByText(
+      `Entrez votre courriel pour enregistrer vos ${run.points} points. Rejouez ensuite pour battre votre record.`,
+    ),
+  ).toBeVisible();
   await page.getByLabel("Votre courriel").fill("alex.tremblay+jeu@gmail.com");
   await page.getByLabel(/J'ai 14 ans ou plus/).check();
   await expect(page.getByLabel(/Envoyez-moi les offres/)).not.toBeChecked();
@@ -124,12 +133,16 @@ test("once the contest has ended, the board shows the final top 3", async ({ pag
   await expect(page.locator(".board tbody tr .tag")).toHaveCount(3);
 });
 
-test("the save form checks the email, the rules box and the nickname", async ({ page }) => {
+test("the game-over form saves with only email and consent, using a private generated nickname", async ({
+  page,
+}) => {
   await page.goto("/?lang=en");
   await stcReady(page);
+  await expect(page.getByLabel("Your email")).toHaveCount(0);
   await play(page);
+  await expect(page.getByLabel("Your email")).toHaveCount(0);
   await scoreAndDie(page);
-  await page.getByRole("button", { name: "SAVE MY SCORE" }).click();
+  await expect(page.getByLabel("Your email")).toBeVisible();
   const submit = page.getByRole("button", { name: "SAVE MY SCORE" });
   await submit.click();
   await expect(page.getByText("Enter a valid email address.")).toBeVisible();
@@ -139,22 +152,16 @@ test("the save form checks the email, the rules box and the nickname", async ({ 
   await expect(page.getByLabel("Your email")).toBeFocused();
 
   await page.getByLabel("Your email").fill("sam.roy@gmail.com");
-  await page.getByLabel("Nickname (optional)").fill("x");
   await page.getByLabel(/I'm 14 or older/).check();
-  await submit.click();
-  await expect(page.getByText("Use 2–16 letters, numbers, spaces or - _ . '")).toBeVisible();
-  await expect(page.getByLabel("Nickname (optional)")).toBeFocused();
-  await page.getByRole("button", { name: "New name" }).click();
-  const nickname = await page.getByLabel("Nickname (optional)").inputValue();
-  expect(nickname).toMatch(/^\S+ \S+ \d+$/);
+  await expect(page.getByLabel("Full name")).toHaveCount(0);
 
   await submit.click();
   await advance(page, 500);
   await expect(page.getByRole("heading", { name: "You're on the leaderboard" })).toBeVisible();
-  // The board shows the nickname, never the email.
+  // The board shows a generated nickname, never the email.
   await page.getByRole("button", { name: "LEADERBOARD" }).click();
   await advance(page, 300);
-  await expect(page.locator(".board tr.me")).toContainText(`YOU · ${nickname}`);
+  await expect(page.locator(".board tr.me")).toContainText("YOU ·");
   await expect(page.locator(".board")).not.toContainText("@");
 });
 

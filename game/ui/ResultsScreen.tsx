@@ -5,6 +5,7 @@ import type { CampaignState, FinishRunResponse, LeaderboardResponse } from "@/li
 import type { RunResult } from "../engine";
 import { useUi } from "./context";
 import { BoardTable, BrandLogo, Overlay, Tools } from "./parts";
+import { SaveScreen, type SaveSubmit } from "./SaveScreen";
 import { campaignMessage } from "./StartScreen";
 
 export type FinishState =
@@ -21,7 +22,7 @@ export function ResultsScreen({
   best,
   newBest,
   preview,
-  onSave,
+  onSubmit,
   onRetryFinish,
   onPlayAgain,
   onShare,
@@ -34,7 +35,7 @@ export function ResultsScreen({
   newBest: boolean;
   /** The top of the board, fetched after a valid run. */
   preview: LeaderboardResponse | null;
-  onSave: () => void;
+  onSubmit: SaveSubmit;
   onRetryFinish: () => void;
   onPlayAgain: () => void;
   onShare: () => void;
@@ -91,6 +92,7 @@ export function ResultsScreen({
           {t.plural("results.hits", result.hits, { n: t.num(result.hits) })}
         </p>
       </div>
+      {canSave && <SaveScreen points={res.points} onSubmit={onSubmit} />}
       {newBest && <p className="badge">{t.t("results.newBest")}</p>}
       {best && !newBest && (
         <p className="small">
@@ -112,17 +114,6 @@ export function ResultsScreen({
         </section>
       )}
       <div className="btn-stack">
-        {canSave && (
-          <button
-            type="button"
-            className="btn primary big"
-            onClick={onSave}
-            data-autofocus
-            data-testid="save"
-          >
-            {t.t("results.saveScore")}
-          </button>
-        )}
         {finish.status === "error" && (
           <button type="button" className="btn" onClick={onRetryFinish}>
             {t.t("common.retry")}

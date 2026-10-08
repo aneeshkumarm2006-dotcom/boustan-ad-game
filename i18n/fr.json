@@ -122,12 +122,12 @@
   "save": {
     "title": "Enregistrez vos points",
     "lede": {
-      "one": "Inscrivez votre {points} point au classement.",
-      "other": "Inscrivez vos {points} points au classement."
+      "one": "Entrez votre courriel pour enregistrer votre {points} point. Rejouez ensuite pour battre votre record.",
+      "other": "Entrez votre courriel pour enregistrer vos {points} points. Rejouez ensuite pour battre votre record."
     },
     "cta": "ENREGISTRER MES POINTS",
     "email": "Votre courriel",
-    "emailHint": "Jamais affiché au classement. Il sert à vous joindre si vous gagnez.",
+    "emailHint": "Votre courriel reste privé. Un pseudo est créé pour le classement. Nous vous écrirons si vous gagnez.",
     "nickname": "Surnom (facultatif)",
     "nicknameHint": "De 2 à 16 caractères. Affiché au classement. Sans surnom, on vous en donne un.",
     "reroll": "Autre nom",

@@ -44,7 +44,7 @@ import { LeaderboardScreen } from "./LeaderboardScreen";
 import { BrandLogo, Overlay, PauseIcon, PixelIcon, SparkIcon, Tools } from "./parts";
 import { ResultsScreen, type FinishState } from "./ResultsScreen";
 import { SavedScreen } from "./SavedScreen";
-import { SaveScreen, type SaveErrorKey, type SaveSubmit } from "./SaveScreen";
+import { type SaveErrorKey, type SaveSubmit } from "./SaveScreen";
 import { shareOrCopy } from "./share";
 import { StartScreen } from "./StartScreen";
 
@@ -55,7 +55,6 @@ type Screen =
   | { name: "start" }
   | { name: "play" }
   | { name: "results" }
-  | { name: "save" }
   | { name: "saved" }
   | { name: "leaderboard"; back: From };
 
@@ -194,6 +193,7 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
     (event: HostEvent) => {
       bridgeRef.current?.emit(event);
       // Screens deep in the tree report these through the host bridge; count them too.
+      if (event.type === "save_view") track("save_view");
       if (event.type === "leaderboard_view") track("leaderboard_view");
       if (event.type === "cta_click") track("cta_click", { target: event.data.target });
     },
@@ -527,7 +527,6 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
       const res = await boot.api.saveScore({
         saveToken: saveCtx.token,
         email: input.email,
-        nickname: input.nickname,
         lang,
         termsAge: input.termsAge,
         marketingOptIn: input.marketingOptIn,
@@ -562,12 +561,6 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
           return failed("network", "save.errors.network");
       }
     }
-  };
-
-  const openSave = () => {
-    emit({ type: "save_view" });
-    track("save_view");
-    setScreen({ name: "save" });
   };
 
   const share = async () => {
@@ -639,20 +632,11 @@ export function GameApp({ fonts, patterns }: { fonts: CanvasFonts; patterns: Hos
             best={best}
             newBest={newBest}
             preview={preview}
-            onSave={openSave}
+            onSubmit={submitSave}
             onRetryFinish={() => runRef.current && void submitFinish(runRef.current, result)}
             onPlayAgain={() => void play()}
             onShare={() => void share()}
             onLeaderboard={() => showBoard("results")}
-          />
-        );
-        break;
-      case "save":
-        overlay = saveCtx && (
-          <SaveScreen
-            points={saveCtx.points}
-            onSubmit={submitSave}
-            onBack={() => setScreen({ name: "results" })}
           />
         );
         break;

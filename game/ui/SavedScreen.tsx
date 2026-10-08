@@ -52,19 +52,19 @@ export function SavedScreen({
           : t.t("saved.winners", { n: WINNERS })}
       </p>
       <div className="btn-stack">
-        <OutLink target="orderOnline" className="btn primary big">
-          {t.t("common.orderOnline")}
-        </OutLink>
-        <OutLink target="findBoustan" className="btn">
-          {t.t("common.findBoustan")}
-        </OutLink>
+        <button type="button" className="btn primary big" onClick={onPlayAgain}>
+          {t.t("common.playAgain")}
+        </button>
+        <button type="button" className="btn" onClick={onLeaderboard}>
+          {t.t("common.leaderboard")}
+        </button>
         <div className="btn-row">
-          <button type="button" className="btn" onClick={onPlayAgain}>
-            {t.t("common.playAgain")}
-          </button>
-          <button type="button" className="btn ghost" onClick={onLeaderboard}>
-            {t.t("common.leaderboard")}
-          </button>
+          <OutLink target="orderOnline" className="btn ghost">
+            {t.t("common.orderOnline")}
+          </OutLink>
+          <OutLink target="findBoustan" className="btn ghost">
+            {t.t("common.findBoustan")}
+          </OutLink>
         </div>
       </div>
     </Overlay>

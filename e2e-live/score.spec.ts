@@ -51,10 +51,8 @@ test("a real run is scored on the server, saved to the leaderboard, and a known 
   expect(Number(shown!.replace(/\D/g, ""))).toBe(result.points);
 
   // A new player saves the score with an email; it goes on the leaderboard (AC-02, LB-02).
-  await page.getByTestId("save").click();
   const email = `E2E.Player+${started}@example.com`;
   await page.getByLabel("Your email").fill(email);
-  await page.getByLabel("Nickname (optional)").fill("E2E Runner");
   await page.getByLabel(/I'm 14 or older/).check();
   await page.getByLabel(/Send me Boustan offers/).check();
   await page.getByRole("button", { name: "SAVE MY SCORE" }).click();
@@ -67,7 +65,7 @@ test("a real run is scored on the server, saved to the leaderboard, and a known 
   const player = (await db.players.findOne({ email }))!;
   expect(player).toMatchObject({
     emailNormalized: "e2e.player@example.com",
-    nickname: "E2E Runner",
+    nickname: expect.any(String),
     marketingOptIn: true,
     hidden: false,
     firstSrc: "e2e-live",
@@ -110,11 +108,11 @@ test("a real run is scored on the server, saved to the leaderboard, and a known 
   // The leaderboard shows nicknames and points, marks the winners, and never an email.
   await page.getByRole("button", { name: "LEADERBOARD" }).click();
   await expect(page.getByTestId("contest")).toContainText("top 3 win");
-  const row = page.getByRole("row", { name: /E2E Runner/ });
+  const row = page.locator(".board tr.me");
   await expect(row).toContainText("YOU");
   await expect(row).toContainText("WINNER");
   const board = await (await page.request.get("/api/leaderboard?limit=7")).json();
-  expect(board.top).toEqual([{ rank: 1, name: "E2E Runner", points: result.points }]);
+  expect(board.top).toEqual([{ rank: 1, name: player.nickname, points: result.points }]);
   expect(JSON.stringify(board)).not.toContain("example.com");
 });
 

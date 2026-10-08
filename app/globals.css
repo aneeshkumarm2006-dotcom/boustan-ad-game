@@ -910,6 +910,19 @@ h3 {
 
 /* ---------- forms ---------- */
 
+.save-next {
+  border-top: 2px solid var(--vert);
+  padding-top: 18px;
+}
+
+.save-next > * + * {
+  margin-top: 14px;
+}
+
+.save-next .heading {
+  font-size: clamp(28px, 7vw, 38px);
+}
+
 form {
   display: grid;
   gap: 12px;
